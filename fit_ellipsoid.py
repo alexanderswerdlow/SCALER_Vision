@@ -164,10 +164,18 @@ def run_pipeline(color_image, depth_image, detection=None):
     print(f"Frame {frame_key} took {time.time() - start}")
     return ellipsoids, detection
 
-def transform_to_world(trans, rot, xyz):
-    T265_to_D435_trans = np.array([0.009, 0.021, 0.027])
-    trans += T265_to_D435_trans
-    return trans + xyz
+# def transform_to_world(trans, rot, xyz):
+#     T265_to_D435_trans = np.array([0.009, 0.021, 0.027])
+#     trans += T265_to_D435_trans
+#     return trans + xyz
+
+def create_transform_matrix(rotation, translation):
+    '''return a 4 x 4 transform matrix'''
+    return np.block([
+                    [rotation, translation],
+                    [np.zeros((1,3)), 1]
+                    ])
+
 
 if __name__ == "__main__":
 
@@ -220,6 +228,13 @@ if __name__ == "__main__":
         if args.use_t265:
             import t265_sub
 
+        # Change t265 localization to d435 frame
+        T265_to_D435_trans = np.array([0.009, 0.021, 0.027]) #translation in meters
+        T265_to_D435_rot = np.array([0.000, -0.018, 0.005]) #rpy in radians
+        #XYZ represents intrinic rotation which is roll, pitch and yaw
+        T265_to_D435_rot = R.from_euler('XYZ', T265_to_D435_rot).as_matrix()
+        T265_to_D435_mat = create_transform_matrix(T265_to_D435_rot, T265_to_D435_trans)
+
         frame_key = 0
         all_ellipsoids = []
         while True:
@@ -231,25 +246,23 @@ if __name__ == "__main__":
             if ellipsoids is None:
                 continue
             if args.use_t265:
-                trans, rot = t265_sub.get_world_camera_tf()
                 ellipsoid_params_data = []  # List of ellipsoid params in world frame
 
-                # Change t265 localization to d435 frame
-                T265_to_D435_trans = np.array([0.009, 0.021, 0.027])
-                T265_to_D435_rot = np.array([0.000, -0.018, 0.005])
-                trans += T265_to_D435_trans
+                world_to_T265_trans, world_to_T265_rot = t265_sub.get_world_camera_tf()
+                world_to_T265_rot = R.from_quat(world_to_T265_rot).as_matrix()
+                world_to_T265_mat = create_transform_matrix(world_to_T265_rot, world_to_T265_trans)
 
-                T265_to_D435_rot = R.from_euler('xyz', T265_to_D435_rot).as_matrix()
-                rot = np.dot(R.from_quat(rot).as_matrix(), T265_to_D435_rot)
-
+                world_to_D435_mat = world_to_T265_mat @ T265_to_D435_mat
+                                
                 for A, centroid in ellipsoids:
                     _, D, V = la.svd(A)
                     rx, ry, rz = 1.0 / np.sqrt(D)
 
-                    trans_world = trans + centroid
-                    rot_world = R.from_matrix(np.dot(rot, V)).as_quat()
-
-                    ellipsoid_params_data.append({"centroid": list(trans_world), "rotation": list(rot_world), "axis": [rx, ry, rz]})
+                    ellipsoid_centroid_world = (world_to_D435_mat @ np.append(centroid, 1))[0:3]
+                    ellipsoid_rotation_world = R.from_matrix(world_to_D435_mat[0:3, 0:3] @ V).as_quat()
+                    
+                    ellipsoid_params_data.append({"centroid": list(
+                        ellipsoid_centroid_world), "rotation": list(ellipsoid_rotation_world), "axis": [rx, ry, rz]})
                 print(ellipsoid_params_data)
                 all_ellipsoids.append({frame_key:ellipsoid_params_data})
 

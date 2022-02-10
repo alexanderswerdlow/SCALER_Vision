@@ -27,4 +27,4 @@ def get_world_camera_tf():
         # y = data.rotation.x
         # z = -data.rotation.y
 
-        return np.array([data.translation.x, data.translation.y, data.translation.z]), np.array([data.rotation.w, data.rotation.x, data.rotation.y, data.rotation.z])
+        return np.array([data.translation.x, data.translation.y, data.translation.z]), np.array([data.rotation.x, data.rotation.y, data.rotation.z, data.rotation.w])
