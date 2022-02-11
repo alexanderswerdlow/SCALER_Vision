@@ -8,3 +8,4 @@ opencv-python
 Pillow
 scikit-image
 scikit-learn
+pyrealsense2
