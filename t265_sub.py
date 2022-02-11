@@ -22,9 +22,9 @@ def get_world_camera_tf():
         data = pose.get_pose_data()
 
         # TODO: Maybe invert as below?
-        # w = data.rotation.w
-        # x = -data.rotation.z
-        # y = data.rotation.x
-        # z = -data.rotation.y
+        w = data.rotation.w
+        x = -data.rotation.z
+        y = data.rotation.x
+        z = -data.rotation.y
 
-        return np.array([data.translation.x, data.translation.y, data.translation.z]), np.array([data.rotation.x, data.rotation.y, data.rotation.z, data.rotation.w])
+        return np.array([data.translation.x, -data.translation.y, -data.translation.z]), np.array([x, y, z, w])

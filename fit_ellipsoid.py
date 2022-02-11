@@ -72,6 +72,9 @@ def cluster_and_fit(im, depth, scores, boxes, masks, save_detections):
     pcd = rgbd_to_pcl(detected_rgb, detected_depth, vis=False)
     pcd, ind = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
 
+    if len(pcd.points) == 0:
+        return None
+
     # Segment point cloud, returning (n,) array of labels
     start = time.time()
     labels = np.array(pcd.cluster_dbscan(eps=0.004, min_points=10, print_progress=False))
@@ -172,7 +175,7 @@ def run_pipeline(color_image, depth_image, detection=None):
 def create_transform_matrix(rotation, translation):
     '''return a 4 x 4 transform matrix'''
     return np.block([
-                    [rotation, translation],
+                    [rotation, translation[:, np.newaxis]],
                     [np.zeros((1,3)), 1]
                     ])
 
@@ -232,7 +235,7 @@ if __name__ == "__main__":
         T265_to_D435_trans = np.array([0.009, 0.021, 0.027]) #translation in meters
         T265_to_D435_rot = np.array([0.000, -0.018, 0.005]) #rpy in radians
         #XYZ represents intrinic rotation which is roll, pitch and yaw
-        T265_to_D435_rot = R.from_euler('XYZ', T265_to_D435_rot).as_matrix()
+        T265_to_D435_rot = R.from_euler('xyz', T265_to_D435_rot).as_matrix()
         T265_to_D435_mat = create_transform_matrix(T265_to_D435_rot, T265_to_D435_trans)
 
         frame_key = 0
@@ -241,6 +244,24 @@ if __name__ == "__main__":
             if frame_key < 10:
                 frame_key += 1
                 continue
+            input("Press any key to take picture")
+            # world_to_T265_trans, world_to_T265_rot = t265_sub.get_world_camera_tf()
+            # print(world_to_T265_trans, R.from_quat(world_to_T265_rot).as_euler('xyz', degrees=True))
+            # continue
+
+            # Default T265
+            # Pitch, up, pos
+            # Yaw, CCW pos
+            # Roll, Left , Pos
+
+            # Transformed
+            # Roll, right, pos
+            # Pitch up pos
+            # Yaw, CW, pos
+            # continue
+
+            # D435, X,Y,Z Out, Right, Down
+            
             color_image, depth_image, _ = d435_sub.get_rgbd()
             ellipsoids, detection = run_pipeline(color_image, depth_image)
             if ellipsoids is None:
@@ -248,8 +269,9 @@ if __name__ == "__main__":
             if args.use_t265:
                 ellipsoid_params_data = []  # List of ellipsoid params in world frame
 
-                world_to_T265_trans, world_to_T265_rot = t265_sub.get_world_camera_tf()
-                world_to_T265_rot = R.from_quat(world_to_T265_rot).as_matrix()
+                world_to_T265_trans, world_to_T265_rot_ = t265_sub.get_world_camera_tf()
+                print(world_to_T265_trans, R.from_quat(world_to_T265_rot_).as_euler('xyz', degrees=True))
+                world_to_T265_rot = R.from_quat(world_to_T265_rot_).as_matrix()
                 world_to_T265_mat = create_transform_matrix(world_to_T265_rot, world_to_T265_trans)
 
                 world_to_D435_mat = world_to_T265_mat @ T265_to_D435_mat
@@ -261,10 +283,9 @@ if __name__ == "__main__":
                     ellipsoid_centroid_world = (world_to_D435_mat @ np.append(centroid, 1))[0:3]
                     ellipsoid_rotation_world = R.from_matrix(world_to_D435_mat[0:3, 0:3] @ V).as_quat()
                     
-                    ellipsoid_params_data.append({"centroid": list(
-                        ellipsoid_centroid_world), "rotation": list(ellipsoid_rotation_world), "axis": [rx, ry, rz]})
+                    ellipsoid_params_data.append({"centroid": list(ellipsoid_centroid_world), "rotation": list(ellipsoid_rotation_world), "axis": [rx, ry, rz]})
                 print(ellipsoid_params_data)
-                all_ellipsoids.append({frame_key:ellipsoid_params_data})
+                all_ellipsoids.append({frame_key:ellipsoid_params_data, 'pose' : (list(world_to_T265_trans), list(R.from_quat(world_to_T265_rot_).as_euler('xyz', degrees=True)))})
 
 
                 import json
