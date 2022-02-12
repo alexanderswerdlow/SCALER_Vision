@@ -199,9 +199,9 @@ if __name__ == "__main__":
     parser.add_argument("--data_files", type=str, default="data_files")
     args = parser.parse_args()
 
-    if args.load_segmentation:
+    if args.load_segmentation or args.run_from_file:
         try:
-            detections = pickle.load(open("detections.p", "rb"))
+            detections = pickle.load(open(f"{args.data_files}/detections.p", "rb"))
         except (OSError, IOError) as e:
             print("detections.p not found, exiting")
             exit()
@@ -232,10 +232,9 @@ if __name__ == "__main__":
         vis = o3d.visualization.Visualizer()
         vis.create_window()
 
-    if args.load_rgbd:
+    if args.run_from_file:
         loaded = np.load(f'{args.data_files}/{args.load_rgbd}', allow_pickle=True)
         frames = list(loaded.keys())
-        ellipsoid_data = []
 
         T265_to_D435_trans = np.array([0.009, 0.021, 0.027]) #translation in meters
         T265_to_D435_rot = np.array([0.000, -0.018, 0.005]) #rpy in radians
@@ -245,11 +244,16 @@ if __name__ == "__main__":
 
         for frame_key in frames:
             color_image, depth_image, ir_image, trans, rot = loaded[frame_key]
+            print(frame_key)
+            # print(trans, rot)
+            from PIL import Image
+            im = Image.fromarray(color_image)
+            im.save(f'output/{frame_key}.png')
             rot = np.array([-rot[2],rot[0], -rot[1],rot[3]])
             rot = R.from_quat(rot).as_matrix()
             trans = np.array([trans[0], -trans[1], -trans[2]])
             extrinsic = create_transform_matrix(rot, trans)
-            ellipsoids, detection = run_pipeline(color_image, depth_image, (None, extrinsic))
+            ellipsoids, detection = run_pipeline(color_image, depth_image, (None, extrinsic), detections[frame_key])
             if ellipsoids is None:
                 continue
 
@@ -257,7 +261,6 @@ if __name__ == "__main__":
                 _, D, V = la.svd(A)
                 rx, ry, rz = 1.0 / np.sqrt(D)
                 print(centroid * 100)
-
 
         exit()
 
