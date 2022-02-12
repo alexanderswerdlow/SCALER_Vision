@@ -12,7 +12,7 @@ import numpy.linalg as la
 from scipy.spatial.transform import Rotation as R
 
 
-def rgbd_to_pcl(rgb_im, depth_im, vis=False):
+def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
     """
     Calibration:  [ 1280x720  p[655.67 358.885]  f[906.667 906.783]  Inverse Brown Conrady [0 0 0 0 0] ] [0.0, 0.0, 0.0, 0.0, 0.0]
     """
@@ -20,7 +20,9 @@ def rgbd_to_pcl(rgb_im, depth_im, vis=False):
     im_depth = o3d.geometry.Image(np.ascontiguousarray(depth_im))
     rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(im_rgb, im_depth, convert_rgb_to_intensity=False)
     intrinsic = o3d.camera.PinholeCameraIntrinsic(1280, 720, 906.667, 906.783, 655.67, 358.885)
-    pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic, project_valid_depth_only=True)
+    _, extrinsic = param
+    pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic, extrinsic, project_valid_depth_only=True)
+    pcd.transform([[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]])
     if vis:
         o3d.visualization.draw_geometries([pcd])
     return pcd
@@ -54,12 +56,12 @@ def segment_image(im, save_detections):
     return scores, boxes, masks
 
 
-def cluster_and_fit(im, depth, scores, boxes, masks, save_detections):
+def cluster_and_fit(im, depth, param, scores, boxes, masks, save_detections):
     """Create point cloud based on segmented masks, cluster, and fit ellipsoids"""
     # Empty images to put detected regions
     detected_rgb, detected_depth = np.zeros_like(im), -np.ones_like(depth)
     for idx, mask in enumerate(masks):
-        if scores[idx] > 0.9:
+        if scores[idx] > 0.98:
             detected_rgb[mask] = im[mask]
             detected_depth[mask] = depth[mask]
 
@@ -69,7 +71,7 @@ def cluster_and_fit(im, depth, scores, boxes, masks, save_detections):
     # cv2.waitKey(0)
 
     # Generate point cloud from RGBD
-    pcd = rgbd_to_pcl(detected_rgb, detected_depth, vis=False)
+    pcd = rgbd_to_pcl(detected_rgb, detected_depth, param, vis=False)
     pcd, ind = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
 
     if len(pcd.points) == 0:
@@ -83,15 +85,15 @@ def cluster_and_fit(im, depth, scores, boxes, masks, save_detections):
         print(f"Clustering points for frame {frame_key} took {time.time() - start}")
         background_rgb, background_depth = im.copy(), depth.copy()  # Background images with detected regions removed
         for idx, mask in enumerate(masks):
-            if scores[idx] > 0.9:
+            if scores[idx] > 0.98:
                 background_rgb[mask] = [0, 0, 0]
                 background_depth[mask] = -1
 
         fig = plt.figure(figsize=(8.0, 8.0))
         ax = fig.add_subplot(111, projection="3d")
 
-        pcd_background = rgbd_to_pcl(background_rgb, background_depth, vis=False).voxel_down_sample(voxel_size=0.01)
-        points = np.asarray(pcd_background.points)
+        # pcd_background = rgbd_to_pcl(background_rgb, background_depth, vis=False).voxel_down_sample(voxel_size=0.01)
+        # points = np.asarray(pcd_background.points)
         # ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=np.asarray(pcd_background.colors), label=f"Background", alpha=0.1, s=0.5)
 
     if args.vis:
@@ -154,17 +156,17 @@ def cluster_and_fit(im, depth, scores, boxes, masks, save_detections):
     return ellipsoids
 
 
-def run_pipeline(color_image, depth_image, detection=None):
+def run_pipeline(color_image, depth_image, param, detection=None):
     start = time.time()
     if detection:
         scores, boxes, masks = detection
     else:
-        if (detection := segment_image(color_image, True)) is None:
+        if (detection := segment_image(color_image, False)) is None:
             return None, None
         scores, boxes, masks = detection
 
-    ellipsoids = cluster_and_fit(color_image, depth_image, scores, boxes, masks, True)
-    print(f"Frame {frame_key} took {time.time() - start}")
+    ellipsoids = cluster_and_fit(color_image, depth_image, param, scores, boxes, masks, False)
+    # print(f"Frame {frame_key} took {time.time() - start}")
     return ellipsoids, detection
 
 # def transform_to_world(trans, rot, xyz):
@@ -179,15 +181,20 @@ def create_transform_matrix(rotation, translation):
                     [np.zeros((1,3)), 1]
                     ])
 
+def rigid_transform(points,T):
+    pnum = points.shape[0]
+    homo_points = np.concatenate([points,np.ones((pnum,1))],axis=1)
+    return (T @ homo_points.T).T[:,:3]
 
 if __name__ == "__main__":
-
+    verbose = False
     parser = argparse.ArgumentParser(description="Run Ellipsoid Fitting")
     parser.add_argument("--load_segmentation", dest="load_segmentation", action="store_true")
     parser.add_argument("--save_segmentation", dest="save_segmentation", action="store_true")
-    parser.add_argument("--load_rgbd", type=str, default="rgbd_high_res.npz")
+    parser.add_argument("--load_rgbd", type=str, default="rgbd.npz")
     parser.add_argument("--use_t265", dest="use_t265", action="store_true")
     parser.add_argument("--use_d435", dest="use_d435", action="store_true")
+    parser.add_argument("--run_from_file", dest="run_from_file", action="store_true")
     parser.add_argument("--vis", dest="vis", action="store_true")
     parser.add_argument("--data_files", type=str, default="data_files")
     args = parser.parse_args()
@@ -225,6 +232,35 @@ if __name__ == "__main__":
         vis = o3d.visualization.Visualizer()
         vis.create_window()
 
+    if args.load_rgbd:
+        loaded = np.load(f'{args.data_files}/{args.load_rgbd}', allow_pickle=True)
+        frames = list(loaded.keys())
+        ellipsoid_data = []
+
+        T265_to_D435_trans = np.array([0.009, 0.021, 0.027]) #translation in meters
+        T265_to_D435_rot = np.array([0.000, -0.018, 0.005]) #rpy in radians
+        #XYZ represents intrinic rotation which is roll, pitch and yaw
+        T265_to_D435_rot = R.from_euler('xyz', T265_to_D435_rot).as_matrix()
+        T265_to_D435_mat = create_transform_matrix(T265_to_D435_rot, T265_to_D435_trans)
+
+        for frame_key in frames:
+            color_image, depth_image, ir_image, trans, rot = loaded[frame_key]
+            rot = np.array([-rot[2],rot[0], -rot[1],rot[3]])
+            rot = R.from_quat(rot).as_matrix()
+            trans = np.array([trans[0], -trans[1], -trans[2]])
+            extrinsic = create_transform_matrix(rot, trans)
+            ellipsoids, detection = run_pipeline(color_image, depth_image, (None, extrinsic))
+            if ellipsoids is None:
+                continue
+
+            for A, centroid in ellipsoids:
+                _, D, V = la.svd(A)
+                rx, ry, rz = 1.0 / np.sqrt(D)
+                print(centroid * 100)
+
+
+        exit()
+
     if args.use_d435:
         import d435_sub
 
@@ -245,52 +281,45 @@ if __name__ == "__main__":
                 frame_key += 1
                 continue
             input("Press any key to take picture")
-            # world_to_T265_trans, world_to_T265_rot = t265_sub.get_world_camera_tf()
-            # print(world_to_T265_trans, R.from_quat(world_to_T265_rot).as_euler('xyz', degrees=True))
-            # continue
+            (color_image, depth_image, _), (intrinsic, _) = d435_sub.get_rgbd()
 
-            # Default T265
-            # Pitch, up, pos
-            # Yaw, CCW pos
-            # Roll, Left , Pos
+            H_t265_d400 = np.array([
+                [1, 0, 0, 0],
+                [0, -1.0, 0, 0],
+                [0, 0, -1.0, 0],
+                [0, 0, 0, 1]])
 
-            # Transformed
-            # Roll, right, pos
-            # Pitch up pos
-            # Yaw, CW, pos
-            # continue
+            # extrinsic = np.linalg.inv(np.linalg.inv(H_t265_d400) @ extrinsic @ H_t265_d400))
+            # extrinsic = R_Standard_d400 @ np.linalg.inv(extrinsic)
+            # print(extrinsic)
 
-            # D435, X,Y,Z Out, Right, Down
-            
-            color_image, depth_image, _ = d435_sub.get_rgbd()
-            ellipsoids, detection = run_pipeline(color_image, depth_image)
+            T = t265_sub.get_world_camera_tf()
+            param = (intrinsic, T)
+            ellipsoids, detection = run_pipeline(color_image, depth_image, param)
             if ellipsoids is None:
                 continue
             if args.use_t265:
                 ellipsoid_params_data = []  # List of ellipsoid params in world frame
 
-                world_to_T265_trans, world_to_T265_rot_ = t265_sub.get_world_camera_tf()
-                print(world_to_T265_trans, R.from_quat(world_to_T265_rot_).as_euler('xyz', degrees=True))
-                world_to_T265_rot = R.from_quat(world_to_T265_rot_).as_matrix()
-                world_to_T265_mat = create_transform_matrix(world_to_T265_rot, world_to_T265_trans)
-
-                world_to_D435_mat = world_to_T265_mat @ T265_to_D435_mat
+                T = t265_sub.get_world_camera_tf()
+                
                                 
                 for A, centroid in ellipsoids:
                     _, D, V = la.svd(A)
                     rx, ry, rz = 1.0 / np.sqrt(D)
+                    print(centroid)
 
-                    ellipsoid_centroid_world = (world_to_D435_mat @ np.append(centroid, 1))[0:3]
-                    ellipsoid_rotation_world = R.from_matrix(world_to_D435_mat[0:3, 0:3] @ V).as_quat()
+                    # ellipsoid_centroid_world = rigid_transform(centroid[np.newaxis,:], T)
+                    # ellipsoid_rotation_world = ellipsoid_centroid_world # R.from_matrix(world_to_D435_mat[0:3, 0:3] @ V).as_quat()
                     
-                    ellipsoid_params_data.append({"centroid": list(ellipsoid_centroid_world), "rotation": list(ellipsoid_rotation_world), "axis": [rx, ry, rz]})
-                print(ellipsoid_params_data)
-                all_ellipsoids.append({frame_key:ellipsoid_params_data, 'pose' : (list(world_to_T265_trans), list(R.from_quat(world_to_T265_rot_).as_euler('xyz', degrees=True)))})
+                    #ellipsoid_params_data.append({"centroid": list(ellipsoid_centroid_world), "rotation": list(ellipsoid_rotation_world), "axis": [rx, ry, rz]})
+                #print(ellipsoid_params_data)
+                # all_ellipsoids.append({frame_key:ellipsoid_params_data, 'pose' : T})
 
 
-                import json
-                with open(f'data_files/ellipoids.json', 'w', encoding='utf-8') as f:
-                    json.dump(all_ellipsoids, f, ensure_ascii=False, indent=4)
+                # import json
+                # with open(f'data_files/ellipoids.json', 'w', encoding='utf-8') as f:
+                #     json.dump(all_ellipsoids, f, ensure_ascii=False, indent=4)
             frame_key += 1
 
     else:

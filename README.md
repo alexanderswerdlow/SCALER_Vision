@@ -11,3 +11,19 @@ sudo apt-get install -y libglib2.0-0 libgl1-mesa-glx
 ```
 
 To install librealsense, visit [here](https://github.com/IntelRealSense/librealsense/blob/master/doc/distribution_linux.md)
+
+
+```
+# Default T265
+# Pitch, up, pos
+# Yaw, CCW pos
+# Roll, Left , Pos
+
+# Transformed
+# Roll, right, pos
+# Pitch up pos
+# Yaw, CW, pos
+# continue
+
+# D435, X,Y,Z Out, Right, Down
+```

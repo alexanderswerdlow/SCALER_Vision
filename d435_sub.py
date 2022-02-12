@@ -55,9 +55,9 @@ def get_rgbd():
     ir_frame = frames.get_infrared_frame()
 
     # Grab new intrinsics (may be changed by decimation)
-    depth_intrinsics = rs.video_stream_profile(
-        depth_frame.profile).get_intrinsics()
-    w, h = depth_intrinsics.width, depth_intrinsics.height
+    intrinsics = rs.video_stream_profile(depth_frame.profile).get_intrinsics()
+    extrinsics = rs.video_stream_profile(depth_frame.profile).get_extrinsics_to(color_frame.get_profile())
+    print(extrinsics)
 
     depth_image = np.asanyarray(depth_frame.get_data())
     color_image = np.asanyarray(color_frame.get_data())
@@ -76,7 +76,7 @@ def get_rgbd():
     # o3d.visualization.draw_geometries([pcd])
 
 
-    return (color_image, depth_image, ir_image)
+    return (color_image, depth_image, ir_image), (intrinsics, extrinsics)
 
 def view():
     depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
@@ -89,17 +89,19 @@ def view():
     cv2.waitKey(1)
 
 if __name__ == "__main__":
-    #writer = IncrementalNpzWriter("rgbd.npz")
+    import t265_sub
+    writer = IncrementalNpzWriter("rgbd.npz")
     idx = 0
     try:
         while True:
-            print(f"Loop {idx}")
-            color_image, depth_image, ir_image = get_rgbd()
+            input(f"Loop {idx}")
+            (color_image, depth_image, ir_image), (int, ext) = get_rgbd()
             if color_image is None:
                 continue
-            view()
+            # view()
             # color_image = np.dstack((color_image, depth_image))
-            # writer.write(f"{idx}", color_image)
+            trans, rot = t265_sub.get_pose()
+            writer.write(f"{idx}", (color_image, depth_image, ir_image, trans, rot))
             idx += 1
 
     finally:
