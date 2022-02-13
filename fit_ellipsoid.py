@@ -21,8 +21,8 @@ def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
     rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(im_rgb, im_depth, convert_rgb_to_intensity=False)
     intrinsic = o3d.camera.PinholeCameraIntrinsic(1280, 720, 906.667, 906.783, 655.67, 358.885)
     _, extrinsic = param
-    pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic, extrinsic, project_valid_depth_only=True)
-    pcd.transform([[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]])
+    pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic, project_valid_depth_only=True)
+#     pcd.transform([[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]])
     if vis:
         o3d.visualization.draw_geometries([pcd])
     return pcd
@@ -176,10 +176,6 @@ def create_transform_matrix(rotation, translation):
                     [rotation, translation[:, np.newaxis]],
                     [np.zeros((1,3)), 1]
                     ])
-
-def T265_as_D435_axis_dir(rot, tran):
-    pass
-
 
 def rigid_transform(points,T):
     pnum = points.shape[0]
