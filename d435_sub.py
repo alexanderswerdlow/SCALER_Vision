@@ -46,7 +46,7 @@ colorizer = rs.colorizer()
 align_to = rs.stream.color
 align = rs.align(align_to)
 
-def get_rgbd():
+def get_rgbd(verbose=False):
     frames = pipeline.wait_for_frames()
     frames = align.process(frames)
 
@@ -57,7 +57,8 @@ def get_rgbd():
     # Grab new intrinsics (may be changed by decimation)
     intrinsics = rs.video_stream_profile(depth_frame.profile).get_intrinsics()
     extrinsics = rs.video_stream_profile(depth_frame.profile).get_extrinsics_to(color_frame.get_profile())
-    print(extrinsics)
+    if verbose:
+        print(extrinsics)
 
     depth_image = np.asanyarray(depth_frame.get_data())
     color_image = np.asanyarray(color_frame.get_data())
@@ -90,7 +91,7 @@ def view():
 
 if __name__ == "__main__":
     import t265_sub
-    writer = IncrementalNpzWriter("rgbd.npz")
+    writer = IncrementalNpzWriter("rgbd1.npz")
     idx = 0
     try:
         while True:

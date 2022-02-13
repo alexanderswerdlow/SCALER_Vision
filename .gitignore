@@ -203,3 +203,6 @@ data_files/
 output/
 .vscode/
 .python-version
+
+*.npz
+*.zip

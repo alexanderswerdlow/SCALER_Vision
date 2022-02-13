@@ -169,10 +169,6 @@ def run_pipeline(color_image, depth_image, param, detection=None):
     # print(f"Frame {frame_key} took {time.time() - start}")
     return ellipsoids, detection
 
-# def transform_to_world(trans, rot, xyz):
-#     T265_to_D435_trans = np.array([0.009, 0.021, 0.027])
-#     trans += T265_to_D435_trans
-#     return trans + xyz
 
 def create_transform_matrix(rotation, translation):
     '''return a 4 x 4 transform matrix'''
@@ -180,6 +176,10 @@ def create_transform_matrix(rotation, translation):
                     [rotation, translation[:, np.newaxis]],
                     [np.zeros((1,3)), 1]
                     ])
+
+def T265_as_D435_axis_dir(rot, tran):
+    pass
+
 
 def rigid_transform(points,T):
     pnum = points.shape[0]
@@ -206,6 +206,7 @@ if __name__ == "__main__":
             print("detections.p not found, exiting")
             exit()
     else:
+        print("Setting up detectron...")
         import detectron2 as dt2
         from detectron2.data import DatasetCatalog, MetadataCatalog
         from detectron2.utils.visualizer import ColorMode, Visualizer
@@ -270,47 +271,79 @@ if __name__ == "__main__":
         if args.use_t265:
             import t265_sub
 
-        # Change t265 localization to d435 frame
-        T265_to_D435_trans = np.array([0.009, 0.021, 0.027]) #translation in meters
-        T265_to_D435_rot = np.array([0.000, -0.018, 0.005]) #rpy in radians
-        #XYZ represents intrinic rotation which is roll, pitch and yaw
-        T265_to_D435_rot = R.from_euler('xyz', T265_to_D435_rot).as_matrix()
-        T265_to_D435_mat = create_transform_matrix(T265_to_D435_rot, T265_to_D435_trans)
+        from pytransform3d import rotations as pr
+        from pytransform3d import transformations as pt
+        from pytransform3d.transform_manager import TransformManager
 
+        tm = TransformManager()
+        
+
+        # Change t265 localization to d435 frame
+        T265_to_D435 = np.array([
+        [0.999968402, -0.006753626, -0.004188075, -0.015890727],
+        [-0.006685408, -0.999848172, 0.016093893, 0.028273059],
+        [-0.004296131, -0.016065384, -0.999861654, -0.009375589],
+        [0.0,0.0,0.0,1.0]])
+
+
+        # H_t265_d400 = np.array([
+        #     [1, 0, 0, 0],
+        #     [0, -1.0, 0, 0],
+        #     [0, 0, -1.0, 0],
+        #     [0, 0, 0, 1]])
+        # T265_to_D435 = H_t265_d400 @ T265_to_D435_mat
+        # print(T265_to_D435_mat)
+
+
+    
         frame_key = 0
         all_ellipsoids = []
         while True:
             if frame_key < 10:
                 frame_key += 1
                 continue
-            input("Press any key to take picture")
+            #input("Press any key to take picture")
             (color_image, depth_image, _), (intrinsic, _) = d435_sub.get_rgbd()
 
-            H_t265_d400 = np.array([
-                [1, 0, 0, 0],
-                [0, -1.0, 0, 0],
-                [0, 0, -1.0, 0],
-                [0, 0, 0, 1]])
 
             # extrinsic = np.linalg.inv(np.linalg.inv(H_t265_d400) @ extrinsic @ H_t265_d400))
             # extrinsic = R_Standard_d400 @ np.linalg.inv(extrinsic)
             # print(extrinsic)
 
-            T = t265_sub.get_world_camera_tf()
+            # T = t265_sub.get_world_camera_tf()
+            T265_tran, T265_quat = t265_sub.get_pose()
+            T = create_transform_matrix(rotation=R.from_quat(T265_quat).as_matrix(), translation=T265_tran)
+
+            world_to_T265_init = pt.transform_from(pr.active_matrix_from_intrinsic_euler_xyz(np.array([np.pi/2, 0.0, 0])),np.zeros(3))
+
+            tm.add_transform("world", "T265_init", world_to_T265_init)
+            tm.add_transform("T265_init", "T265", T)
+            tm.add_transform("T265", "D435", T265_to_D435)
+           
+            
+            #continue
+
             param = (intrinsic, T)
             ellipsoids, detection = run_pipeline(color_image, depth_image, param)
             if ellipsoids is None:
+                input('No ellipsoids, press Enter to continue')
+       
                 continue
+
             if args.use_t265:
                 ellipsoid_params_data = []  # List of ellipsoid params in world frame
 
-                T = t265_sub.get_world_camera_tf()
+                #T = t265_sub.get_world_camera_tf()
                 
                                 
-                for A, centroid in ellipsoids:
+                for i, (A, centroid) in enumerate(ellipsoids):
                     _, D, V = la.svd(A)
                     rx, ry, rz = 1.0 / np.sqrt(D)
+                    print('centroid coords in camera frame')
                     print(centroid)
+
+                    D435_to_ellipsoid = create_transform_matrix(rotation=V, translation=centroid)
+                    tm.add_transform("D435", f"Ellipsoid{i}", D435_to_ellipsoid)
 
                     # ellipsoid_centroid_world = rigid_transform(centroid[np.newaxis,:], T)
                     # ellipsoid_rotation_world = ellipsoid_centroid_world # R.from_matrix(world_to_D435_mat[0:3, 0:3] @ V).as_quat()
@@ -318,6 +351,16 @@ if __name__ == "__main__":
                     #ellipsoid_params_data.append({"centroid": list(ellipsoid_centroid_world), "rotation": list(ellipsoid_rotation_world), "axis": [rx, ry, rz]})
                 #print(ellipsoid_params_data)
                 # all_ellipsoids.append({frame_key:ellipsoid_params_data, 'pose' : T})
+
+                #ax = tm.plot_frames_in("world", s=0.1)
+                ax = tm.plot_frames_in("D435", s=0.1, whitelist=["D435","Ellipsoid0"])
+                ax.set_xlim(-0.5, 0.5)
+                ax.set_ylim(-0.5, 0.5)
+                ax.set_zlim(-0.5, 0.5)
+                plt.waitforbuttonpress(1)
+                input('Waiting for input')
+                ax.clear() 
+                
 
 
                 # import json

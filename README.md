@@ -27,3 +27,8 @@ To install librealsense, visit [here](https://github.com/IntelRealSense/libreals
 
 # D435, X,Y,Z Out, Right, Down
 ```
+
+To visualize in pytransform3d:
+```
+sudo apt install python3-pyqt5
+```
