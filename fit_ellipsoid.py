@@ -18,7 +18,7 @@ T265_to_D435_mat = np.array([
         [0, 0, 0, 1]
         ])
 
-min_volume = 1e-4
+min_volume = 5e-5
 min_score = 0.80
 
 def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
@@ -28,13 +28,8 @@ def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
     im_rgb = o3d.geometry.Image(np.ascontiguousarray(rgb_im))
     im_depth = o3d.geometry.Image(np.ascontiguousarray(depth_im))
     rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(im_rgb, im_depth, convert_rgb_to_intensity=False)
-    
     intrinsic, extrinsic = param
-    if intrinsic is None:
-        intrinsic = o3d.camera.PinholeCameraIntrinsic(1280, 720, 906.667, 906.783, 655.67, 358.885)
-    else:
-        intrinsic = o3d.camera.PinholeCameraIntrinsic(int(intrinsic[0]), int(intrinsic[1]), *intrinsic[2:])
-
+    intrinsic = o3d.camera.PinholeCameraIntrinsic(int(intrinsic[0]), int(intrinsic[1]), *intrinsic[2:])
     pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic, project_valid_depth_only=True)
     if extrinsic is not None:
         pcd.transform(extrinsic)
@@ -102,7 +97,7 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
         fig = plt.figure(figsize=(8.0, 8.0))
         ax = fig.add_subplot(111, projection="3d")
 
-        pcd_background = rgbd_to_pcl(background_rgb, background_depth, (None, None), vis=False).voxel_down_sample(voxel_size=0.01)
+        pcd_background = rgbd_to_pcl(background_rgb, background_depth, param, vis=False).voxel_down_sample(voxel_size=0.01)
         points = np.asarray(pcd_background.points)
         ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=np.asarray(pcd_background.colors), label=f"Background", alpha=0.1, s=0.5)
 
@@ -115,7 +110,7 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
         if args.vis:
             vis.add_geometry(cluster_pcd)
 
-        if cluster_pcd.get_axis_aligned_bounding_box().get_extent().max() < 0.1:
+        if cluster_pcd.get_axis_aligned_bounding_box().get_extent().max() < 0.05:
             continue
 
         cluster_pcd = cluster_pcd.voxel_down_sample(voxel_size=0.005)
@@ -239,14 +234,19 @@ if __name__ == "__main__":
         vis.create_window()
 
     if args.run_from_file:
-        loaded = np.load(f"{args.data_files}/rgbd1.npz", allow_pickle=True)
+        loaded = np.load(f"{args.data_files}/capture_1.npz", allow_pickle=True)
         frames = list(loaded.keys())
         predictions = []
 
-        for frame_key in frames:
-            color_image, depth_image, ir_image, trans, rot = loaded[frame_key]
+        for frame_key in frames[::2]:
+            try:
+                color_image, depth_image, ir_image, intrinsic, trans, rot = loaded[frame_key]
+            except:
+                print('Error, exiting')
+                break
+
             extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat
-            ellipsoids, detection = run_pipeline(color_image, depth_image, (None, extrinsic), detections[frame_key] if args.load_segmentation else None)
+            ellipsoids, detection = run_pipeline(color_image, depth_image, (intrinsic, extrinsic), detections[frame_key] if args.load_segmentation else None)
             if args.save_segmentation:
                 detections[frame_key] = detection
             if ellipsoids is None:
@@ -255,20 +255,31 @@ if __name__ == "__main__":
 
             for A, centroid, rotation, axes in ellipsoids:
                 found_match = False
-                for idx, (center, pred_center, pred_axes) in enumerate(predictions):
+                for idx, (center, A, pred_center, pred_axes) in enumerate(predictions):
                     if np.abs(np.linalg.norm(center - centroid)) < 0.05:
-                        predictions[idx][1].append(centroid)
-                        predictions[idx][2].append(axes)
+                        predictions[idx][2].append(centroid)
+                        predictions[idx][3].append(axes)
                         found_match = True
                         break
 
                 if not found_match:
-                    predictions.append((centroid, [centroid], [axes]))
-                
-        for idx, (center, pred_center, pred_axes) in enumerate(predictions):
-            centroid_predicted = np.array([*pred_center])
-            axes_predicted = np.array([*pred_axes])
-            print(f'Object {idx} has Centroid Std Dev (cm): {np.std(centroid_predicted, axis=0) * 100} Axis Std Dev (cm): {np.std(axes_predicted, axis=0) * 100} over {len(centroid_predicted)} samples')
+                    predictions.append((centroid, A, [centroid], [axes]))
+        
+        fig = plt.figure(figsize=(8.0, 8.0))
+        ax = fig.add_subplot(111, projection="3d")
+        for idx, (center, A, pred_center, pred_axes) in enumerate(predictions):
+            if len(pred_center) > 10:
+                centroid_predicted = np.mean(np.array([*pred_center]), axis=0)
+                outer_ellipsoid.plot_ellipsoid(A, centroid_predicted, "green", ax)
+
+        ax.set_xlim3d([-1, 1])
+        ax.set_ylim3d([-1, 1])
+        ax.set_zlim3d([0, 2])
+        ax.view_init(elev=270, azim=270)
+        plt.legend(loc="best")
+        plt.savefig(f"output/all_detections.jpg", dpi=300, bbox_inches="tight")
+        plt.close()
+        
     elif args.use_t265_and_d435:
         import d435_sub
         import t265_sub
