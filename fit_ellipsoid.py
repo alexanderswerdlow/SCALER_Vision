@@ -10,7 +10,17 @@ import pickle
 import argparse
 import numpy.linalg as la
 from scipy.spatial.transform import Rotation as R
+from scipy.spatial import KDTree
 
+T265_to_D435_mat = np.array([
+        [0.999968402, -0.006753626, -0.004188075, -0.015890727],
+        [-0.006685408, -0.999848172, 0.016093893, 0.028273059],
+        [-0.004296131, -0.016065384, -0.999861654, -0.009375589],
+        [0, 0, 0, 1]
+        ])
+
+min_volume = 1e-4
+min_score = 0.80
 
 def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
     """
@@ -19,18 +29,25 @@ def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
     im_rgb = o3d.geometry.Image(np.ascontiguousarray(rgb_im))
     im_depth = o3d.geometry.Image(np.ascontiguousarray(depth_im))
     rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(im_rgb, im_depth, convert_rgb_to_intensity=False)
-    intrinsic = o3d.camera.PinholeCameraIntrinsic(1280, 720, 906.667, 906.783, 655.67, 358.885)
-    _, extrinsic = param
-    pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic, extrinsic, project_valid_depth_only=True)
-    pcd.transform([[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]])
+    
+    intrinsic, extrinsic = param
+    if intrinsic is None:
+        intrinsic = o3d.camera.PinholeCameraIntrinsic(1280, 720, 906.667, 906.783, 655.67, 358.885)
+    else:
+        intrinsic = o3d.camera.PinholeCameraIntrinsic(*intrinsic)
+
+    pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic, project_valid_depth_only=True)
+    if extrinsic is not None:
+        pcd.transform(extrinsic)
     if vis:
         o3d.visualization.draw_geometries([pcd])
     return pcd
 
 
-def segment_image(im, save_detections):
+def segment_image(im):
     """Run Mask-RCNN w/Detectron 2 and return bounding boxes, masks, scores"""
     start = time.time()
+    print('a')
     outputs = predictor(im)
 
     if len(outputs["instances"].pred_boxes) == 0:
@@ -38,12 +55,14 @@ def segment_image(im, save_detections):
         cv2.imwrite(f"output/{frame_key}-climbnet.jpg", im)
         return None
 
+    print('v')
     results = outputs["instances"].to("cpu")
     boxes = results.pred_boxes.tensor.detach().numpy()
     scores = results.scores.detach().numpy()
     masks = results.pred_masks.detach().numpy()
+    print('c')
 
-    if save_detections:
+    if args.verbose:
         print(f"Segmentation took {time.time() - start}")
         v = Visualizer(
             im[:, :, ::-1],
@@ -56,19 +75,14 @@ def segment_image(im, save_detections):
     return scores, boxes, masks
 
 
-def cluster_and_fit(im, depth, param, scores, boxes, masks, save_detections):
+def cluster_and_fit(im, depth, param, scores, boxes, masks):
     """Create point cloud based on segmented masks, cluster, and fit ellipsoids"""
     # Empty images to put detected regions
     detected_rgb, detected_depth = np.zeros_like(im), -np.ones_like(depth)
     for idx, mask in enumerate(masks):
-        if scores[idx] > 0.98:
+        if scores[idx] > min_score:
             detected_rgb[mask] = im[mask]
             detected_depth[mask] = depth[mask]
-
-    # cv2.imshow('a', detected_rgb)
-    # cv2.waitKey(0)
-    # cv2.imshow('ba', depth)
-    # cv2.waitKey(0)
 
     # Generate point cloud from RGBD
     pcd = rgbd_to_pcl(detected_rgb, detected_depth, param, vis=False)
@@ -81,20 +95,20 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks, save_detections):
     start = time.time()
     labels = np.array(pcd.cluster_dbscan(eps=0.004, min_points=10, print_progress=False))
 
-    if save_detections:
+    if args.verbose:
         print(f"Clustering points for frame {frame_key} took {time.time() - start}")
         background_rgb, background_depth = im.copy(), depth.copy()  # Background images with detected regions removed
         for idx, mask in enumerate(masks):
-            if scores[idx] > 0.98:
+            if scores[idx] > min_score:
                 background_rgb[mask] = [0, 0, 0]
                 background_depth[mask] = -1
 
         fig = plt.figure(figsize=(8.0, 8.0))
         ax = fig.add_subplot(111, projection="3d")
 
-        # pcd_background = rgbd_to_pcl(background_rgb, background_depth, vis=False).voxel_down_sample(voxel_size=0.01)
-        # points = np.asarray(pcd_background.points)
-        # ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=np.asarray(pcd_background.colors), label=f"Background", alpha=0.1, s=0.5)
+        pcd_background = rgbd_to_pcl(background_rgb, background_depth, (None, None), vis=False).voxel_down_sample(voxel_size=0.01)
+        points = np.asarray(pcd_background.points)
+        ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=np.asarray(pcd_background.colors), label=f"Background", alpha=0.1, s=0.5)
 
     if args.vis:
         vis.clear_geometries()
@@ -104,28 +118,31 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks, save_detections):
         cluster_pcd = pcd.select_by_index(np.argwhere(labels == idx))
         if args.vis:
             vis.add_geometry(cluster_pcd)
-        
+
         if cluster_pcd.get_axis_aligned_bounding_box().get_extent().max() < 0.1:
             continue
-        
+
         cluster_pcd = cluster_pcd.voxel_down_sample(voxel_size=0.005)
         points = np.asarray(cluster_pcd.points)
-        
 
         try:
             start = time.time()
-            A_outer, centroid_outer = outer_ellipsoid.outer_ellipsoid_fit(points, tol=0.01)
-            ellipsoids.append((A_outer, centroid_outer))
-        except:
-            print(f"Fit failed for {idx}")
+            A, centroid = outer_ellipsoid.outer_ellipsoid_fit(points, tol=0.01)
+            _, D, V = la.svd(A)
+            axes = 1.0 / np.sqrt(D)
+            if ((4 / 3) * np.pi * np.prod(axes)) > min_volume:
+                ellipsoids.append((A, centroid, R.from_matrix(V).as_quat(), axes))
+
+        except Exception as e:
+            print(f"Fit failed for {idx}: {e}")
             continue
 
-        if save_detections:
+        if args.verbose:
             print(f"Fit for {idx} took {time.time() - start} for {len(points)} points")
-            outer_ellipsoid.plot_ellipsoid(A_outer, centroid_outer, "green", ax)
+            outer_ellipsoid.plot_ellipsoid(A, centroid, "green", ax)
             ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=np.asarray(cluster_pcd.colors), label=f"{idx}")
 
-    if save_detections:
+    if args.verbose:
         ax.view_init(elev=270, azim=270)
         x_limits = ax.get_xlim3d()
         y_limits = ax.get_ylim3d()
@@ -137,18 +154,19 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks, save_detections):
         y_middle = np.mean(y_limits)
         z_range = abs(z_limits[1] - z_limits[0])
         z_middle = np.mean(z_limits)
+        plot_radius = 0.5 * max([x_range, y_range, z_range])
 
-        # The plot bounding box is a sphere in the sense of the infinity
-        # norm, hence I call half the max range the plot radius.
-        plot_radius = 0.5*max([x_range, y_range, z_range])
+        # ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
+        # ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
+        # ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
-        ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
-        ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
-        ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
+        ax.set_xlim3d([-0.5, 0.5])
+        ax.set_ylim3d([-0.5, 0.5])
+        ax.set_zlim3d([0, 1])
         plt.legend(loc="best")
         plt.savefig(f"output/{frame_key}.jpg", dpi=300, bbox_inches="tight")
         plt.close()
-    
+
     if args.vis:
         vis.poll_events()
         vis.update_renderer()
@@ -161,45 +179,36 @@ def run_pipeline(color_image, depth_image, param, detection=None):
     if detection:
         scores, boxes, masks = detection
     else:
-        if (detection := segment_image(color_image, False)) is None:
+        if (detection := segment_image(color_image)) is None:
             return None, None
         scores, boxes, masks = detection
 
-    ellipsoids = cluster_and_fit(color_image, depth_image, param, scores, boxes, masks, False)
-    # print(f"Frame {frame_key} took {time.time() - start}")
+    ellipsoids = cluster_and_fit(color_image, depth_image, param, scores, boxes, masks)
+    if args.verbose:
+        print(f"Frame {frame_key} took {time.time() - start}")
     return ellipsoids, detection
 
-# def transform_to_world(trans, rot, xyz):
-#     T265_to_D435_trans = np.array([0.009, 0.021, 0.027])
-#     trans += T265_to_D435_trans
-#     return trans + xyz
 
-def create_transform_matrix(rotation, translation):
-    '''return a 4 x 4 transform matrix'''
-    return np.block([
-                    [rotation, translation[:, np.newaxis]],
-                    [np.zeros((1,3)), 1]
-                    ])
-
-def rigid_transform(points,T):
-    pnum = points.shape[0]
-    homo_points = np.concatenate([points,np.ones((pnum,1))],axis=1)
-    return (T @ homo_points.T).T[:,:3]
+def get_transformation(trans, rot):
+    r = R.from_quat(rot)
+    rotation = np.array(r.as_matrix())
+    translation = trans[np.newaxis].T
+    T = np.hstack((rotation, translation))
+    T = np.vstack((T, np.array([0, 0, 0, 1])))
+    return T
 
 if __name__ == "__main__":
-    verbose = False
     parser = argparse.ArgumentParser(description="Run Ellipsoid Fitting")
     parser.add_argument("--load_segmentation", dest="load_segmentation", action="store_true")
     parser.add_argument("--save_segmentation", dest="save_segmentation", action="store_true")
-    parser.add_argument("--load_rgbd", type=str, default="rgbd.npz")
-    parser.add_argument("--use_t265", dest="use_t265", action="store_true")
-    parser.add_argument("--use_d435", dest="use_d435", action="store_true")
+    parser.add_argument("--use_t265_and_d435", dest="use_t265_and_d435", action="store_true")
     parser.add_argument("--run_from_file", dest="run_from_file", action="store_true")
     parser.add_argument("--vis", dest="vis", action="store_true")
+    parser.add_argument("--verbose", dest="verbose", action="store_true")
     parser.add_argument("--data_files", type=str, default="data_files")
     args = parser.parse_args()
 
-    if args.load_segmentation or args.run_from_file:
+    if args.load_segmentation:
         try:
             detections = pickle.load(open(f"{args.data_files}/detections.p", "rb"))
         except (OSError, IOError) as e:
@@ -214,11 +223,12 @@ if __name__ == "__main__":
 
         model_path = f"{args.data_files}/model_d2_R_50_FPN_3x.pth"
         dt2.data.datasets.register_coco_instances("climb_dataset", {}, f"{args.data_files}/mask.json", "")
-
+        #model_path = f"{args.data_files}/training/model_final.pth"
+        #dt2.data.datasets.register_coco_instances("climb_dataset", {}, f"datasets/coco/annotations/instances_empty.json", "")
         cfg = dt2.config.get_cfg()
         cfg.merge_from_file(model_zoo.get_config_file("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"))
         cfg.DATALOADER.NUM_WORKERS = 1
-        cfg.MODEL.ROI_HEADS.NUM_CLASSES = 3  # 3 classes (hold, volume, downclimb)
+        cfg.MODEL.ROI_HEADS.NUM_CLASSES = 1  # 3 classes (hold, volume, downclimb)
         cfg.MODEL.WEIGHTS = os.path.join(model_path)
         # cfg.MODEL.DEVICE = "cpu"
         cfg.DATASETS.TEST = ("climb_dataset",)
@@ -233,50 +243,43 @@ if __name__ == "__main__":
         vis.create_window()
 
     if args.run_from_file:
-        loaded = np.load(f'{args.data_files}/{args.load_rgbd}', allow_pickle=True)
+        loaded = np.load(f"{args.data_files}/rgbd1.npz", allow_pickle=True)
         frames = list(loaded.keys())
 
-        T265_to_D435_trans = np.array([0.009, 0.021, 0.027]) #translation in meters
-        T265_to_D435_rot = np.array([0.000, -0.018, 0.005]) #rpy in radians
-        #XYZ represents intrinic rotation which is roll, pitch and yaw
-        T265_to_D435_rot = R.from_euler('xyz', T265_to_D435_rot).as_matrix()
-        T265_to_D435_mat = create_transform_matrix(T265_to_D435_rot, T265_to_D435_trans)
+        from collections import defaultdict
+        predictions = []
+
 
         for frame_key in frames:
             color_image, depth_image, ir_image, trans, rot = loaded[frame_key]
-            print(frame_key)
-            # print(trans, rot)
-            from PIL import Image
-            im = Image.fromarray(color_image)
-            im.save(f'output/{frame_key}.png')
-            rot = np.array([-rot[2],rot[0], -rot[1],rot[3]])
-            rot = R.from_quat(rot).as_matrix()
-            trans = np.array([trans[0], -trans[1], -trans[2]])
-            extrinsic = create_transform_matrix(rot, trans)
-            ellipsoids, detection = run_pipeline(color_image, depth_image, (None, extrinsic), detections[frame_key])
+            extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat
+            ellipsoids, detection = run_pipeline(color_image, depth_image, (None, extrinsic), detections[frame_key] if args.load_segmentation else None)
+            if args.save_segmentation:
+                detections[frame_key] = detection
             if ellipsoids is None:
+                print("None!")
                 continue
 
-            for A, centroid in ellipsoids:
-                _, D, V = la.svd(A)
-                rx, ry, rz = 1.0 / np.sqrt(D)
-                print(centroid * 100)
+            for A, centroid, rotation, axes in ellipsoids:
+                found_match = False
+                for idx, (center, pred_center, pred_axes) in enumerate(predictions):
+                    if np.abs(np.linalg.norm(center - centroid)) < 0.05:
+                        predictions[idx][1].append(centroid)
+                        predictions[idx][2].append(axes)
+                        found_match = True
+                        break
 
-        exit()
-
-    if args.use_d435:
+                if not found_match:
+                    predictions.append((centroid, [centroid], [axes]))
+                
+        for idx, (center, pred_center, pred_axes) in enumerate(predictions):
+            centroid_predicted = np.array([*pred_center])
+            axes_predicted = np.array([*pred_axes])
+            print(f'Object {idx} has Centroid Std Dev (cm): {np.std(centroid_predicted, axis=0) * 100} Axis Std Dev (cm): {np.std(axes_predicted, axis=0) * 100} over {len(centroid_predicted)} samples')
+    elif args.use_t265_and_d435:
         import d435_sub
-
-        if args.use_t265:
-            import t265_sub
-
-        # Change t265 localization to d435 frame
-        T265_to_D435_trans = np.array([0.009, 0.021, 0.027]) #translation in meters
-        T265_to_D435_rot = np.array([0.000, -0.018, 0.005]) #rpy in radians
-        #XYZ represents intrinic rotation which is roll, pitch and yaw
-        T265_to_D435_rot = R.from_euler('xyz', T265_to_D435_rot).as_matrix()
-        T265_to_D435_mat = create_transform_matrix(T265_to_D435_rot, T265_to_D435_trans)
-
+        import t265_sub
+        
         frame_key = 0
         all_ellipsoids = []
         while True:
@@ -285,48 +288,27 @@ if __name__ == "__main__":
                 continue
             input("Press any key to take picture")
             (color_image, depth_image, _), (intrinsic, _) = d435_sub.get_rgbd()
-
-            H_t265_d400 = np.array([
-                [1, 0, 0, 0],
-                [0, -1.0, 0, 0],
-                [0, 0, -1.0, 0],
-                [0, 0, 0, 1]])
-
-            # extrinsic = np.linalg.inv(np.linalg.inv(H_t265_d400) @ extrinsic @ H_t265_d400))
-            # extrinsic = R_Standard_d400 @ np.linalg.inv(extrinsic)
-            # print(extrinsic)
-
-            T = t265_sub.get_world_camera_tf()
-            param = (intrinsic, T)
-            ellipsoids, detection = run_pipeline(color_image, depth_image, param)
+            trans, rot = t265_sub.get_pose()
+            extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat
+            ellipsoids, detection = run_pipeline(color_image, depth_image, (intrinsic, extrinsic))
             if ellipsoids is None:
+                print("None!")
                 continue
-            if args.use_t265:
-                ellipsoid_params_data = []  # List of ellipsoid params in world frame
+            
+            ellipsoid_params_data = []  # List of ellipsoid params in world frame
+            T = t265_sub.get_world_camera_tf()
+            for A, centroid, rotation, axes in ellipsoids:
+                ellipsoid_params_data.append({"frame" : frame_key, "A" : list(A), "centroid": list(centroid), "rotation": list(rotation), "axis": axes})
+            
+            all_ellipsoids.append(ellipsoid_params_data)
 
-                T = t265_sub.get_world_camera_tf()
-                
-                                
-                for A, centroid in ellipsoids:
-                    _, D, V = la.svd(A)
-                    rx, ry, rz = 1.0 / np.sqrt(D)
-                    print(centroid)
-
-                    # ellipsoid_centroid_world = rigid_transform(centroid[np.newaxis,:], T)
-                    # ellipsoid_rotation_world = ellipsoid_centroid_world # R.from_matrix(world_to_D435_mat[0:3, 0:3] @ V).as_quat()
-                    
-                    #ellipsoid_params_data.append({"centroid": list(ellipsoid_centroid_world), "rotation": list(ellipsoid_rotation_world), "axis": [rx, ry, rz]})
-                #print(ellipsoid_params_data)
-                # all_ellipsoids.append({frame_key:ellipsoid_params_data, 'pose' : T})
-
-
-                # import json
-                # with open(f'data_files/ellipoids.json', 'w', encoding='utf-8') as f:
-                #     json.dump(all_ellipsoids, f, ensure_ascii=False, indent=4)
+            import json
+            with open(f'data_files/ellipoids.json', 'w', encoding='utf-8') as f:
+                json.dump(all_ellipsoids, f, ensure_ascii=False, indent=4)
             frame_key += 1
 
     else:
-        loaded = np.load(args.load_rgbd)
+        loaded = np.load(f'{args.data_files}/rgbd.npz')
         frames = list(loaded.keys())
         ellipsoid_data = []
 
@@ -348,7 +330,7 @@ if __name__ == "__main__":
 
             ellipsoid_data.append(ellipsoids)
 
-        if args.save_segmentation:
-            pickle.dump(detections, open(f"{args.data_files}/detections.p", "wb"))
-
         pickle.dump(ellipsoid_data, open(f"{args.data_files}/ellipsoids.p", "wb"))
+
+    if args.save_segmentation:
+        pickle.dump(detections, open(f"{args.data_files}/detections.p", "wb"))

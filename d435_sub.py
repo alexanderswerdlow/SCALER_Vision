@@ -75,7 +75,6 @@ def get_rgbd():
     # pcd.points = o3d.utility.Vector3dVector(verts)
     # o3d.visualization.draw_geometries([pcd])
 
-
     return (color_image, depth_image, ir_image), (intrinsics, extrinsics)
 
 def view():
@@ -95,13 +94,13 @@ if __name__ == "__main__":
     try:
         while True:
             input(f"Loop {idx}")
-            (color_image, depth_image, ir_image), (int, ext) = get_rgbd()
+            (color_image, depth_image, ir_image), (intrinsic, extrinsic) = get_rgbd()
             if color_image is None:
                 continue
-            # view()
-            # color_image = np.dstack((color_image, depth_image))
+            
             trans, rot = t265_sub.get_pose()
-            writer.write(f"{idx}", (color_image, depth_image, ir_image, trans, rot))
+            intrinsic = np.array([intrinsic.width, intrinsic.height, intrinsic.ppx, intrinsic.ppy, intrinsic.fx, intrinsic.fy])
+            writer.write(f"{idx}", (color_image, depth_image, ir_image, intrinsic, trans, rot))
             idx += 1
 
     finally:

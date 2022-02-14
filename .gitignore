@@ -203,3 +203,5 @@ data_files/
 output/
 .vscode/
 .python-version
+datasets/
+archive/
