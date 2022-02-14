@@ -57,7 +57,6 @@ def get_rgbd():
     # Grab new intrinsics (may be changed by decimation)
     intrinsics = rs.video_stream_profile(depth_frame.profile).get_intrinsics()
     extrinsics = rs.video_stream_profile(depth_frame.profile).get_extrinsics_to(color_frame.get_profile())
-    print(extrinsics)
 
     depth_image = np.asanyarray(depth_frame.get_data())
     color_image = np.asanyarray(color_frame.get_data())

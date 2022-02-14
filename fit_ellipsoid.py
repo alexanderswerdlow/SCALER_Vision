@@ -55,12 +55,10 @@ def segment_image(im):
         cv2.imwrite(f"output/{frame_key}-climbnet.jpg", im)
         return None
 
-    print('v')
     results = outputs["instances"].to("cpu")
     boxes = results.pred_boxes.tensor.detach().numpy()
     scores = results.scores.detach().numpy()
     masks = results.pred_masks.detach().numpy()
-    print('c')
 
     if args.verbose:
         print(f"Segmentation took {time.time() - start}")
@@ -228,7 +226,7 @@ if __name__ == "__main__":
         cfg = dt2.config.get_cfg()
         cfg.merge_from_file(model_zoo.get_config_file("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"))
         cfg.DATALOADER.NUM_WORKERS = 1
-        cfg.MODEL.ROI_HEADS.NUM_CLASSES = 1  # 3 classes (hold, volume, downclimb)
+        cfg.MODEL.ROI_HEADS.NUM_CLASSES = 3  # 3 classes (hold, volume, downclimb)
         cfg.MODEL.WEIGHTS = os.path.join(model_path)
         # cfg.MODEL.DEVICE = "cpu"
         cfg.DATASETS.TEST = ("climb_dataset",)
@@ -245,10 +243,7 @@ if __name__ == "__main__":
     if args.run_from_file:
         loaded = np.load(f"{args.data_files}/rgbd1.npz", allow_pickle=True)
         frames = list(loaded.keys())
-
-        from collections import defaultdict
         predictions = []
-
 
         for frame_key in frames:
             color_image, depth_image, ir_image, trans, rot = loaded[frame_key]
