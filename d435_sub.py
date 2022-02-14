@@ -24,6 +24,7 @@ if not found_rgb:
 config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
 config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
 config.enable_stream(rs.stream.infrared, 1, 1280, 720, rs.format.y8, 30)
+config.enable_record_to_file('data_files/capture_1_d435.bag')
 
 # [ 1280x720  p[655.67 358.885]  f[906.667 906.783]
 
@@ -74,6 +75,7 @@ def get_rgbd():
     # pcd.points = o3d.utility.Vector3dVector(verts)
     # o3d.visualization.draw_geometries([pcd])
 
+    intrinsics = np.array([intrinsics.width, intrinsics.height, intrinsics.fx, intrinsics.fy, intrinsics.ppx, intrinsics.ppy])
     return (color_image, depth_image, ir_image), (intrinsics, extrinsics)
 
 def view():
@@ -88,18 +90,17 @@ def view():
 
 if __name__ == "__main__":
     import t265_sub
-    writer = IncrementalNpzWriter("rgbd.npz")
+    writer = IncrementalNpzWriter("data_files/capture_1.npz")
     idx = 0
     try:
         while True:
-            input(f"Loop {idx}")
-            (color_image, depth_image, ir_image), (intrinsic, extrinsic) = get_rgbd()
+            # input(f"Loop {idx}")
+            (color_image, depth_image, ir_image), (intrinsics, extrinsic) = get_rgbd()
             if color_image is None:
                 continue
             
             trans, rot = t265_sub.get_pose()
-            intrinsic = np.array([intrinsic.width, intrinsic.height, intrinsic.ppx, intrinsic.ppy, intrinsic.fx, intrinsic.fy])
-            writer.write(f"{idx}", (color_image, depth_image, ir_image, intrinsic, trans, rot))
+            writer.write(f"{idx}", (color_image, depth_image, ir_image, intrinsics, trans, rot))
             idx += 1
 
     finally:

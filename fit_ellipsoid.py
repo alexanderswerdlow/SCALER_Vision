@@ -10,7 +10,6 @@ import pickle
 import argparse
 import numpy.linalg as la
 from scipy.spatial.transform import Rotation as R
-from scipy.spatial import KDTree
 
 T265_to_D435_mat = np.array([
         [0.999968402, -0.006753626, -0.004188075, -0.015890727],
@@ -34,7 +33,7 @@ def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
     if intrinsic is None:
         intrinsic = o3d.camera.PinholeCameraIntrinsic(1280, 720, 906.667, 906.783, 655.67, 358.885)
     else:
-        intrinsic = o3d.camera.PinholeCameraIntrinsic(*intrinsic)
+        intrinsic = o3d.camera.PinholeCameraIntrinsic(int(intrinsic[0]), int(intrinsic[1]), *intrinsic[2:])
 
     pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic, project_valid_depth_only=True)
     if extrinsic is not None:
@@ -47,7 +46,6 @@ def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
 def segment_image(im):
     """Run Mask-RCNN w/Detectron 2 and return bounding boxes, masks, scores"""
     start = time.time()
-    print('a')
     outputs = predictor(im)
 
     if len(outputs["instances"].pred_boxes) == 0:
@@ -291,9 +289,9 @@ if __name__ == "__main__":
                 continue
             
             ellipsoid_params_data = []  # List of ellipsoid params in world frame
-            T = t265_sub.get_world_camera_tf()
             for A, centroid, rotation, axes in ellipsoids:
-                ellipsoid_params_data.append({"frame" : frame_key, "A" : list(A), "centroid": list(centroid), "rotation": list(rotation), "axis": axes})
+                ellipsoid_params_data.append({"frame" : frame_key, "centroid": list(centroid), "rotation": list(rotation), "axis": list(axes)})
+                print(centroid)
             
             all_ellipsoids.append(ellipsoid_params_data)
 
