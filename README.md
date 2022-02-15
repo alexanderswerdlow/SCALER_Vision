@@ -10,6 +10,8 @@ pip install detectron2 -f https://dl.fbaipublicfiles.com/detectron2/wheels/cu113
 sudo apt-get install -y libglib2.0-0 libgl1-mesa-glx
 ```
 
+For other systems, you will need a different torch/detectron version.
+
 To install librealsense, visit [here](https://github.com/IntelRealSense/librealsense/blob/master/doc/distribution_linux.md)
 
 
