@@ -1,17 +1,19 @@
-import os
-import sys
 import numpy as np
 import pyrealsense2 as rs
-import math as m
-from scipy.spatial.transform import Rotation as R
+
+use_bag = False
 
 # Declare RealSense pipeline, encapsulating the actual device and sensors
 pipe = rs.pipeline()
 
 # Build config object and request pose data
 cfg = rs.config()
-cfg.enable_stream(rs.stream.pose)
-cfg.enable_record_to_file('data_files/capture_1_t265.bag')
+
+if use_bag:
+    cfg.enable_device_from_file('data_files/capture_1_t265.bag')
+else:
+    cfg.enable_stream(rs.stream.pose)
+    cfg.enable_record_to_file('data_files/capture_1_t265.bag')
 
 # Start streaming with requested config
 pipe.start(cfg)

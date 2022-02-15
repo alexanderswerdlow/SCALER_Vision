@@ -3,28 +3,34 @@ import pyrealsense2 as rs
 import cv2
 from util import IncrementalNpzWriter
 
+use_bag = False
+
 pipeline = rs.pipeline()
 config = rs.config()
 
-# Get device product line for setting a supporting resolution
-pipeline_wrapper = rs.pipeline_wrapper(pipeline)
-pipeline_profile = config.resolve(pipeline_wrapper)
-device = pipeline_profile.get_device()
-device_product_line = str(device.get_info(rs.camera_info.product_line))
+if use_bag:
+    config.enable_device_from_file('data_files/capture_1_d435.bag')
+else:
+    # Get device product line for setting a supporting resolution
+    pipeline_wrapper = rs.pipeline_wrapper(pipeline)
+    pipeline_profile = config.resolve(pipeline_wrapper)
+    device = pipeline_profile.get_device()
+    device_product_line = str(device.get_info(rs.camera_info.product_line))
 
-found_rgb = False
-for s in device.sensors:
-    if s.get_info(rs.camera_info.name) == "RGB Camera":
-        found_rgb = True
-        break
-if not found_rgb:
-    print("The demo requires Depth camera with Color sensor")
-    exit(0)
+    found_rgb = False
+    for s in device.sensors:
+        if s.get_info(rs.camera_info.name) == "RGB Camera":
+            found_rgb = True
+            break
+    if not found_rgb:
+        print("The demo requires Depth camera with Color sensor")
+        exit(0)
 
-config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
-config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
-config.enable_stream(rs.stream.infrared, 1, 1280, 720, rs.format.y8, 30)
-config.enable_record_to_file('data_files/capture_1_d435.bag')
+    config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
+    config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
+    config.enable_stream(rs.stream.infrared, 1, 1280, 720, rs.format.y8, 30)
+    config.enable_record_to_file('data_files/capture_1_d435.bag')
+
 
 # [ 1280x720  p[655.67 358.885]  f[906.667 906.783]
 
