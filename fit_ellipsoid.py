@@ -11,6 +11,7 @@ import numpy.linalg as la
 from scipy.spatial.transform import Rotation as R
 import matplotlib
 from util import get_transformation
+from aruco import get_d435_to_wall
 
 T265_to_D435_mat = np.array(
     [
@@ -177,7 +178,12 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
             return None, None
         scores, boxes, masks = detection
 
-    extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat @ Wall_Frame_to_T265_mat
+    # For T265
+    # extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat
+
+    # For Aruco Tags
+    extrinsic = get_transformation(trans, rot) @ get_d435_to_wall(color_image, intrinsic)
+
     ellipsoids = cluster_and_fit(color_image, depth_image, (intrinsic, extrinsic), scores, boxes, masks)
     if args.verbose:
         print(f"Frame {frame_key} took {time.time() - start}")
