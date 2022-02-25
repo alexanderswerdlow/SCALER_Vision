@@ -96,11 +96,12 @@ def view():
 
 if __name__ == "__main__":
     import t265_sub
-    writer = IncrementalNpzWriter("data_files/capture_1.npz")
+    from datetime import datetime
+    current_date_time = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
+    writer = IncrementalNpzWriter(f"data_files/captures/{current_date_time}.npz")
     idx = 0
     try:
         while True:
-            # input(f"Loop {idx}")
             (color_image, depth_image, ir_image), (intrinsics, extrinsic) = get_rgbd()
             if color_image is None:
                 continue
@@ -110,5 +111,5 @@ if __name__ == "__main__":
             idx += 1
 
     finally:
-        #writer.close()
+        writer.close()
         pipeline.stop()

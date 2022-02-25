@@ -3,6 +3,13 @@ import io
 import typing
 import shutil
 import numpy as np
+
+def get_transformation(trans, rot):
+    rot = R.from_quat(rot).as_matrix()
+    trans = trans[np.newaxis].T
+    return np.vstack((np.hstack((rot, trans)), np.array([0, 0, 0, 1])))
+
+
 class IncrementalNpzWriter:
     """
     Write data to npz file incrementally rather than compute all and write

@@ -15,17 +15,15 @@ For other systems, you will need a different torch/detectron version.
 To install librealsense, visit [here](https://github.com/IntelRealSense/librealsense/blob/master/doc/distribution_linux.md)
 
 
-```
-# Default T265
-# Pitch, up, pos
-# Yaw, CCW pos
-# Roll, Left , Pos
+## Coordinate Frames
 
-# Transformed
-# Roll, right, pos
-# Pitch up pos
-# Yaw, CW, pos
-# continue
+Default T265 (Viewing as if camera):
+- X: Right, Y: Up, Z: Inwards
+- Pitch: Up, Yaw: CCW, Roll: Left
 
-# D435, X,Y,Z Out, Right, Down
-```
+Default D435 (Viewing as if camera):
+- X: Right, Y: Down, Z: Out
+
+Wall Frame (Viewing in front of wall):
+- X: right, Y: up, Z: out
+- Center of top left hole is 0,0

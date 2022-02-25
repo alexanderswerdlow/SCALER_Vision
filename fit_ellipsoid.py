@@ -10,12 +10,22 @@ import argparse
 import numpy.linalg as la
 from scipy.spatial.transform import Rotation as R
 import matplotlib
+from util import get_transformation
 
 T265_to_D435_mat = np.array(
     [
         [0.999968402, -0.006753626, -0.004188075, -0.015890727],
         [-0.006685408, -0.999848172, 0.016093893, 0.028273059],
         [-0.004296131, -0.016065384, -0.999861654, -0.009375589],
+        [0, 0, 0, 1],
+    ]
+)
+
+Wall_Frame_to_T265_mat = np.array(
+    [
+        [1, 0, 0, 0.4], # Right is positive
+        [0, 1, 0, 0], # Up is positive
+        [0, 0, 1, 0.81], # Out of wall is positive
         [0, 0, 0, 1],
     ]
 )
@@ -38,7 +48,7 @@ def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
     intrinsic = o3d.camera.PinholeCameraIntrinsic(int(intrinsic[0]), int(intrinsic[1]), *intrinsic[2:])
     pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic, project_valid_depth_only=True)
     if extrinsic is not None:
-        pcd.transform(extrinsic)
+        pcd.transform(extrinsic) # Transform from D435 Frame to T265 Frame
     if vis:
         o3d.visualization.draw_geometries([pcd])
     return pcd
@@ -103,7 +113,7 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
         print(f"Clustering points for frame {frame_key} took {time.time() - start}")
         fig = plt.figure(figsize=(12, 12))
         ax = fig.add_subplot(111, projection="3d")
-        
+
         points = np.asarray(pcd_background.points)
         ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=np.asarray(pcd_background.colors), label=f"Background", alpha=0.2, s=0.5)
 
@@ -167,7 +177,7 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
             return None, None
         scores, boxes, masks = detection
 
-    extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat
+    extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat @ Wall_Frame_to_T265_mat
     ellipsoids = cluster_and_fit(color_image, depth_image, (intrinsic, extrinsic), scores, boxes, masks)
     if args.verbose:
         print(f"Frame {frame_key} took {time.time() - start}")
@@ -186,7 +196,7 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
 
     filtered_response = []
     if args.verbose:
-        fig = plt.figure(figsize=(12,12))
+        fig = plt.figure(figsize=(12, 12))
         ax = fig.add_subplot(111, projection="3d")
         ax.set_xlim3d([-1, 1])
         ax.set_ylim3d([-1, 1])
@@ -202,7 +212,7 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
             filtered_response.append((A, centroid_predicted, axes_predicted, centroid_predicted_std, axes_predicted_std))
             if args.verbose:
                 outer_ellipsoid.plot_ellipsoid(A, centroid_predicted, "green", ax)
-                
+
     if args.verbose:
         plt.savefig(f"output/map-{frame_key}.png", dpi=300)
         ax.cla()
@@ -210,14 +220,6 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
 
     return filtered_response, detection
 
-
-def get_transformation(trans, rot):
-    r = R.from_quat(rot)
-    rotation = np.array(r.as_matrix())
-    translation = trans[np.newaxis].T
-    T = np.hstack((rotation, translation))
-    T = np.vstack((T, np.array([0, 0, 0, 1])))
-    return T
 
 
 if __name__ == "__main__":
@@ -229,6 +231,7 @@ if __name__ == "__main__":
     parser.add_argument("--viz", dest="viz", action="store_true")
     parser.add_argument("--verbose", dest="verbose", action="store_true")
     parser.add_argument("--data_files", type=str, default="data_files")
+    parser.add_argument("--capture", type=str, default="capture_1.npz")
     args = parser.parse_args()
 
     if args.load_segmentation:
@@ -267,7 +270,7 @@ if __name__ == "__main__":
 
     predictions = []
     if args.run_from_file:
-        loaded = np.load(f"{args.data_files}/captures/capture_1.npz", allow_pickle=True)
+        loaded = np.load(f"{args.data_files}/captures/{args.capture}", allow_pickle=True)
         frames = list(loaded.keys())
 
         for frame_key in frames:
@@ -277,13 +280,12 @@ if __name__ == "__main__":
                 print("Error, exiting")
                 break
 
-            ellipsoids, detection = run_pipeline(
-                color_image, depth_image, ir_image, intrinsic, trans, rot, detections[frame_key] if args.load_segmentation else None
-            )
+            prev_detection = detections[frame_key] if args.load_segmentation else None
+            ellipsoids, detection = run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, prev_detection)
             if args.save_segmentation:
                 detections[frame_key] = detection
 
-            if args.save_segmentation and frame_key == '30':
+            if args.save_segmentation and frame_key == "30":
                 pickle.dump(detections, open(f"{args.data_files}/generated/detections.p", "wb"))
                 exit()
 
