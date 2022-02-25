@@ -31,7 +31,7 @@ def pose_estimation(frame, aruco_dict_type, matrix_coefficients, distortion_coef
     parameters = cv2.aruco.DetectorParameters_create()
 
     corners, ids, rejected_img_points = cv2.aruco.detectMarkers(gray, cv2.aruco_dict, parameters=parameters, cameraMatrix=matrix_coefficients, distCoeff=distortion_coefficients)
-
+    tvec, rvec = None, None
     # If markers are detected
     if len(corners) > 0:
         for i in range(0, len(ids)):
@@ -52,7 +52,10 @@ def get_d435_to_wall(color_image, intrinsics):
     k = np.array([[intrinsics[2], 0, intrinsics[4]], [0, intrinsics[3], intrinsics[5]], [0, 0, 1]])
     d = np.zeros((1, 5))
     output, rvec, tvec = pose_estimation(color_image, aruco_dict_type, k, d)
-    d435_to_wall = get_transformation(tvec, rvec_2_euler(rvec.flatten()))
+    if rvec is not None:
+        d435_to_wall = get_transformation(tvec.flatten()*10, rvec_2_euler(rvec.flatten()))
+    else:
+        d435_to_wall = None
     return d435_to_wall, output
 
 

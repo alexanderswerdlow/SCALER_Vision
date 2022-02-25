@@ -7,10 +7,11 @@ from scipy.spatial.transform import Rotation as R
 
 def rvec_2_euler(rvec):
     EULER = 'zyx'
-    euler_rvec = R.from_rotvec(rvec).as_euler(EULER)
+    euler_rvec = R.from_rotvec(rvec).as_quat()
     return euler_rvec
 
 def get_transformation(trans, rot):
+    #breakpoint()
     rot = R.from_quat(rot).as_matrix()
     trans = trans[np.newaxis].T
     return np.vstack((np.hstack((rot, trans)), np.array([0, 0, 0, 1])))
