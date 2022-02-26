@@ -37,6 +37,7 @@ min_detections = 5
 min_dist_detection_clustering = 0.05
 handhold_voxel_downsample = 0.005
 fit_tolerance = 0.01
+min_axis_aligned_bounding_box_len = 0.075
 
 
 def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
@@ -88,29 +89,33 @@ def segment_image(im):
 def cluster_and_fit(im, depth, param, scores, boxes, masks):
     """Create point cloud based on segmented masks, cluster, and fit ellipsoids"""
     # Empty images to put detected regions
-    detected_rgb, detected_depth = np.zeros_like(im), -np.ones_like(depth)
+    pcds, rejected_masks = [], set()
     for idx, mask in enumerate(masks):
         if scores[idx] > min_score:
-            detected_rgb[mask] = im[mask]
-            detected_depth[mask] = depth[mask]
 
-    # Generate point cloud from RGBD
-    pcd = rgbd_to_pcl(detected_rgb, detected_depth, param, vis=False)
-    pcd, ind = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+            detected_rgb_mask, detected_depth_mask = np.zeros_like(im), -np.ones_like(depth)
+            detected_rgb_mask[mask], detected_depth_mask[mask] = im[mask], depth[mask]
 
-    if len(pcd.points) == 0:
-        return []
+            pcd = rgbd_to_pcl(detected_rgb_mask, detected_depth_mask, param, vis=False)
+            pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+
+            if pcd.get_axis_aligned_bounding_box().get_extent().max() < min_axis_aligned_bounding_box_len:
+                rejected_masks.add(idx)
+            else:
+                pcds.append(pcd)
+        else:
+            rejected_masks.add(idx)
 
     # Segment point cloud, returning (n,) array of labels
     start = time.time()
-    labels = np.array(pcd.cluster_dbscan(eps=0.004, min_points=10, print_progress=False))
 
     background_rgb, background_depth = im.copy(), depth.copy()  # Background images with detected regions removed
     for idx, mask in enumerate(masks):
-        if scores[idx] > min_score:
+        if idx not in rejected_masks:
             background_rgb[mask] = [0, 0, 0]
             background_depth[mask] = -1
-    pcd_background = rgbd_to_pcl(background_rgb, background_depth, param, vis=False).voxel_down_sample(voxel_size=0.0075)
+
+    pcd_background = rgbd_to_pcl(background_rgb, background_depth, param, vis=False).voxel_down_sample(voxel_size=0.005)
 
     if args.verbose:
         print(f"Clustering points for frame {frame_key} took {time.time() - start}")
@@ -118,7 +123,7 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
         ax = fig.add_subplot(111, projection="3d")
 
         points = np.asarray(pcd_background.points)
-        ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=np.asarray(pcd_background.colors), label=f"Background", alpha=0.5, s=0.5)
+        ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=np.asarray(pcd_background.colors), label=f"Background", alpha=0.65, s=0.5)
 
     if args.viz:
         vis.clear_geometries()
@@ -126,13 +131,9 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
         vis.add_geometry(pcd_background)
 
     ellipsoids = []
-    for idx in range(labels.max() + 1):
-        cluster_pcd = pcd.select_by_index(np.argwhere(labels == idx))
+    for idx, cluster_pcd in enumerate(pcds):
         if args.viz:
             vis.add_geometry(cluster_pcd)
-
-        if cluster_pcd.get_axis_aligned_bounding_box().get_extent().max() < 0.05:
-            continue
 
         cluster_pcd = cluster_pcd.voxel_down_sample(voxel_size=handhold_voxel_downsample)
         points = np.asarray(cluster_pcd.points)
@@ -157,9 +158,9 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
 
     if args.verbose:
         ax.view_init(elev=270, azim=270)
-        ax.set_xlim3d([-1, 1])
-        ax.set_ylim3d([-1, 1])
-        ax.set_zlim3d([0, 2])
+        ax.set_xlim3d([-0.75, 0.75])
+        ax.set_ylim3d([-0.75, 0.75])
+        ax.set_zlim3d([0, 1])
         plt.title(f"Detected {len(ellipsoids)} handholds")
         plt.legend(loc="best")
         plt.savefig(f"output/3d-{frame_key}.png", dpi=500, bbox_inches="tight")
@@ -195,7 +196,7 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
     ellipsoids = cluster_and_fit(color_image, depth_image, (intrinsic, extrinsic), scores, boxes, masks)
     if args.verbose:
         print(f"Frame {frame_key} took {time.time() - start}")
-        plt.imsave(f'output/rgb-{frame_key}.png', color_image)
+        plt.imsave(f"output/rgb-{frame_key}.png", color_image)
 
     for A, centroid, _, axes in ellipsoids:
         found_match = False
@@ -214,8 +215,8 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
         fig = plt.figure(figsize=(12, 12))
         ax = fig.add_subplot(111, projection="3d")
         ax.set_xlim3d([-1, 1])
-        ax.set_ylim3d([-1, 1])
-        ax.set_zlim3d([0, 2])
+        ax.set_ylim3d([-0.5, 0.5])
+        ax.set_zlim3d([0, 1])
         ax.view_init(elev=270, azim=270)
 
     for idx, (center, A, pred_center, pred_axes) in enumerate(predictions):
@@ -230,7 +231,7 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
 
     if args.verbose:
         plt.title(f"Detected {len(predictions)} handholds")
-        plt.savefig(f"output/map-{frame_key}.png", dpi=500, bbox_inches='tight')
+        plt.savefig(f"output/map-{frame_key}.png", dpi=500, bbox_inches="tight")
         ax.cla()
         plt.close()
 

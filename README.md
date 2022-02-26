@@ -1,3 +1,4 @@
+## Installation Instructions
 
 On Ubuntu 20.04:
 ```
@@ -27,3 +28,11 @@ Default D435 (Viewing as if camera):
 Wall Frame (Viewing in front of wall):
 - X: right, Y: up, Z: out
 - Center of top left hole is 0,0
+
+## Pipeline Overview
+
+- Capture RGBD Images from D435
+- Segment images using detectron2 and pre-trained 2d segmentation network
+- Take each mask from segmentation and project that mask into a point cloud using camera intrinsics
+- Filter point clouds by segmentation score, bounding box size, etc.
+- Perform Ellipsoid Fitting on each point cloud
