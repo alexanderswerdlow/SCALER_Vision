@@ -10,3 +10,4 @@ scikit-image
 scikit-learn
 pyrealsense2
 pytransform3d
+opencv-contrib-python

@@ -59,7 +59,7 @@ def plot_ellipsoid(A, centroid, color, ax):
     E = np.dstack((x, y, z))
     E = np.dot(E, V) + centroid
     x, y, z = np.rollaxis(E, axis=-1)
-    ax.plot_wireframe(x, y, z, cstride=1, rstride=1, color=color, alpha=0.4)
+    ax.plot_wireframe(x, y, z, cstride=1, rstride=1, color=color, alpha=0.9, linewidth=0.1)
     ax.set_zlabel('Z-Axis')
     ax.set_ylabel('Y-Axis')
     ax.set_xlabel('X-Axis')

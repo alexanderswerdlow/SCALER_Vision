@@ -15,7 +15,7 @@ def view():
     cv2.waitKey(1)
 
 
-def pose_estimation(frame, aruco_dict_type, matrix_coefficients, distortion_coefficients):
+def get_d435_to_wall(frame, intrinsics, draw_frame=False):
 
     """
     frame - Frame from the video stream
@@ -26,37 +26,38 @@ def pose_estimation(frame, aruco_dict_type, matrix_coefficients, distortion_coef
     frame - The frame with the axis drawn on it
     """
 
+    if draw_frame:
+        frame = np.copy(frame)
+
+    aruco_dict_type = cv2.aruco.DICT_5X5_1000
+    matrix_coefficients = np.array([[intrinsics[2], 0, intrinsics[4]], [0, intrinsics[3], intrinsics[5]], [0, 0, 1]])
+    distortion_coefficients = np.zeros((1, 5))
+
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     cv2.aruco_dict = cv2.aruco.Dictionary_get(aruco_dict_type)
     parameters = cv2.aruco.DetectorParameters_create()
 
-    corners, ids, rejected_img_points = cv2.aruco.detectMarkers(gray, cv2.aruco_dict, parameters=parameters, cameraMatrix=matrix_coefficients, distCoeff=distortion_coefficients)
+    corners, ids, _ = cv2.aruco.detectMarkers(gray, cv2.aruco_dict, parameters=parameters, cameraMatrix=matrix_coefficients, distCoeff=distortion_coefficients)
     tvec, rvec = None, None
-    # If markers are detected
-    if len(corners) > 0:
+
+    if len(corners) > 0:  # If markers are detected
         for i in range(0, len(ids)):
             # Estimate pose of each marker and return the values rvec and tvec---(different from those of camera coefficients)
-            rvec, tvec, markerPoints = cv2.aruco.estimatePoseSingleMarkers(corners[i], 0.01, matrix_coefficients, distortion_coefficients)
-            print(10 * tvec, rvec)
-            # Draw a square around the markers
-            cv2.aruco.drawDetectedMarkers(frame, corners)
+            # The marker corrdinate system is centered on the middle of the marker
+            rvec, tvec, _ = cv2.aruco.estimatePoseSingleMarkers(corners[i], 0.01, matrix_coefficients, distortion_coefficients)
 
-            # Draw Axis
-            cv2.aruco.drawAxis(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, 0.01)
+            if draw_frame:
+                cv2.aruco.drawDetectedMarkers(frame, corners)  # Draw a square around the markers
+                cv2.aruco.drawAxis(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, 0.01)  # Draw Axis
 
-    return frame, rvec, tvec
-
-
-def get_d435_to_wall(color_image, intrinsics):
-    aruco_dict_type = cv2.aruco.DICT_5X5_1000
-    k = np.array([[intrinsics[2], 0, intrinsics[4]], [0, intrinsics[3], intrinsics[5]], [0, 0, 1]])
-    d = np.zeros((1, 5))
-    output, rvec, tvec = pose_estimation(color_image, aruco_dict_type, k, d)
     if rvec is not None:
-        d435_to_wall = get_transformation(tvec.flatten()*10, rvec_2_euler(rvec.flatten()))
+        tvec = -tvec.flatten() * 10
+        rvec = rvec_2_euler(np.zeros(3)).flatten()  # rvec_2_euler(rvec.flatten()).flatten()
+        d435_to_wall = get_transformation(tvec, rvec)
     else:
         d435_to_wall = None
-    return d435_to_wall, output
+
+    return d435_to_wall, frame
 
 
 if __name__ == "__main__":
@@ -71,10 +72,9 @@ if __name__ == "__main__":
             if color_image is None:
                 continue
 
-            d435_to_wall, output = get_d435_to_wall(color_image, intrinsics)
-            print(d435_to_wall)
+            d435_to_wall = get_d435_to_wall(color_image, intrinsics)
 
-            cv2.imshow("Estimated Pose", output)
+            cv2.imshow("Estimated Pose", color_image)
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
