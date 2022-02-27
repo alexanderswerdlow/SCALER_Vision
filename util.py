@@ -5,6 +5,9 @@ import shutil
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
+def get_mean_std(arr):
+    return f'Mean: {np.mean(np.array([*arr]), axis=0)}, Std: {np.std(np.array([*arr]), axis=0)}'
+
 def rvec_2_euler(rvec):
     EULER = 'zyx'
     euler_rvec = R.from_rotvec(rvec).as_quat()

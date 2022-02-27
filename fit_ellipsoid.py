@@ -9,7 +9,7 @@ import pickle
 import argparse
 import numpy.linalg as la
 from scipy.spatial.transform import Rotation as R
-from util import get_transformation
+from util import get_transformation, get_mean_std
 from aruco import get_d435_to_wall
 
 T265_to_D435_mat = np.array(
@@ -81,6 +81,12 @@ def segment_image(im):
 
     return scores, boxes, masks
 
+def border_elems_generic(a, W): # Input array : a, Edgewidth : W
+    n1 = a.shape[0]
+    r1 = np.minimum(np.arange(n1)[::-1], np.arange(n1))
+    n2 = a.shape[1]
+    r2 = np.minimum(np.arange(n2)[::-1], np.arange(n2))
+    return a[np.minimum(r1[:,None],r2)<W]
 
 def cluster_and_fit(im, depth, param, scores, boxes, masks):
     """Create point cloud based on segmented masks, cluster, and fit ellipsoids"""
@@ -93,9 +99,9 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
             detected_rgb_mask[mask], detected_depth_mask[mask] = im[mask], depth[mask]
 
             pcd = rgbd_to_pcl(detected_rgb_mask, detected_depth_mask, param, vis=False)
-            pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+            # pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
 
-            if pcd.get_axis_aligned_bounding_box().get_extent().max() < min_axis_aligned_bounding_box_len:
+            if pcd.get_axis_aligned_bounding_box().get_extent().max() < min_axis_aligned_bounding_box_len or np.any(border_elems_generic(mask, 1)):
                 rejected_masks.add(idx)
             else:
                 pcds.append(pcd)
@@ -155,7 +161,7 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
         ax.set_xlim3d([-0.75, 0.75])
         ax.set_ylim3d([0.75, -0.75])
         ax.set_zlim3d([0, 1])
-        plt.title(f"Detected {len(predictions)} handholds at pos: {trans*100}")
+        plt.title(f"Detected {len(ellipsoids)} handholds at pos: {trans*100}")
         plt.legend(loc="best")
         plt.savefig(f"output/3d-{frame_key}.png", dpi=500, bbox_inches="tight")
         ax.cla()
@@ -231,16 +237,36 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
         ax.set_zlim3d([0, 1])
         ax.view_init(elev=270, azim=270)
 
-        for idx, (center, A, pred_center, pred_axes) in enumerate(predictions):
-            if len(pred_center) > min_detections:
-                centroid_predicted = np.mean(np.array([*pred_center]), axis=0)
-                axes_predicted = np.mean(np.array([*pred_axes]), axis=0)
-                centroid_predicted_std = np.std(np.array([*pred_center]), axis=0)
-                axes_predicted_std = np.std(np.array([*pred_axes]), axis=0)
-                filtered_response.append((A, centroid_predicted, axes_predicted, centroid_predicted_std, axes_predicted_std))
-                outer_ellipsoid.plot_ellipsoid(A, centroid_predicted, "green", ax)
-                print(idx, centroid_predicted_std*100)
-    
+        # for idx, (center, A, pred_center, pred_axes) in enumerate(predictions):
+        #     if len(pred_center) > min_detections:
+        #         centroid_predicted = np.mean(np.array([*pred_center]), axis=0)
+        #         axes_predicted = np.mean(np.array([*pred_axes]), axis=0)
+        #         centroid_predicted_std = np.std(np.array([*pred_center]), axis=0)
+        #         axes_predicted_std = np.std(np.array([*pred_axes]), axis=0)
+        #         filtered_response.append((A, centroid_predicted, axes_predicted, centroid_predicted_std, axes_predicted_std))
+        #         outer_ellipsoid.plot_ellipsoid(A, centroid_predicted, "green", ax)
+        #         # print('abs', idx, centroid_predicted_std*100)
+
+        handholds.clear()
+        for idx, (center, axes, frame_rec) in enumerate(all_predictions):
+            dist, idx = handhold_tree.query(center[:2])
+            handholds[idx].append((center, axes, frame_rec))
+
+        all_err, all_euc_err, all_centers = [], [], []
+        for idx, detected_instances in handholds.items():
+            center_errors, centers = [], []
+            for center, axes, frame_rec in detected_instances:
+                center_errors.append(np.linalg.norm(handhold_gt[idx] - center[:2])*100)
+                all_err.append(handhold_gt[idx] - center[:2]*100)
+                centers.append(center[:2]*100)
+                all_centers.append(center[:2]*100)
+                all_euc_err.append(np.linalg.norm(handhold_gt[idx] - center[:2])*100)
+
+            print(f'GT for {idx}, Err: {get_mean_std(center_errors)}, Center: {get_mean_std(centers)}')
+            
+        print(f"GT Overall Err: Euclidean: {get_mean_std(all_euc_err)}, X,Y: {get_mean_std(all_err)}")
+        print(f"Abs Overall X,Y: {get_mean_std(all_centers)}")
+
         plt.title(f"Detected {len(predictions)} handholds at pos: {trans*100}")
         plt.savefig(f"output/map-{frame_key}.png", dpi=300, bbox_inches="tight")
         ax.cla()
@@ -308,6 +334,14 @@ if __name__ == "__main__":
     all_predictions = []
     aruco_locs = []
     d435_to_wall = None
+    from scipy.spatial import KDTree
+    in_to_m = 0.0254
+    handhold_gt = np.array([[5, 0], [8, 4], [8, 9], [10, 12], [8, -4], [0, -5], [0, 5], [-6, -3], [-6, 3], [-17, -4], [-17, 2], [-14, 10]]).astype(np.float64)
+    handhold_gt *= in_to_m
+    handhold_tree = KDTree(handhold_gt)
+
+    from collections import defaultdict
+    handholds = defaultdict(list)
     if args.run_from_file:
         loaded = np.load(f"{args.data_files}/captures/{args.capture}", allow_pickle=True)
         frames = list(loaded.keys())
@@ -316,6 +350,8 @@ if __name__ == "__main__":
         for frame_key in frames:
             if frame_key == "0":
                 frame_key = "1"
+            elif int(frame_key) <= 16:
+                continue
 
             try:
                 color_image, depth_image, ir_image, intrinsic, trans, rot = loaded[frame_key]
@@ -335,14 +371,7 @@ if __name__ == "__main__":
             pickle.dump(detections, open(f"{args.data_files}/segmentation/{args.capture.rstrip('.npz')}.p", "wb"))
             exit()
 
-        from scipy.spatial import KDTree
-        in_to_m = 0.0254
-        handhold_gt = np.array([[5, 0], [8, 4], [8, 9], [10, 12], [8, -4], [0, -5], [0, 5], [-6, -3], [-6, 3], [-17, -4], [-17, 2], [-14, 10]]).astype(np.float64)
-        handhold_gt *= in_to_m
-        handhold_tree = KDTree(handhold_gt)
-
-        from collections import defaultdict
-        handholds = defaultdict(list)
+        
         plt.figure()
         for idx, (center, axes, frame_rec) in enumerate(all_predictions):
             dist, idx = handhold_tree.query(center[:2])
@@ -362,18 +391,6 @@ if __name__ == "__main__":
         plt.ylim(-10, 10)
         plt.savefig('output/aruco_locs.png')
         plt.close()
-
-        for idx, detected_instances in handholds.items():
-            center_errors, centers = [], []
-            for center, axes, frame_rec in detected_instances:
-                center_errors.append(np.linalg.norm(handhold_gt[idx] - center[:2]))
-                centers.append(center[:2])
-
-            center_predicted_mean = np.mean(np.array([*center_errors]), axis=0)
-            center_predicted_std = np.std(np.array([*center_errors]), axis=0)
-            center_predicted_mean_ = np.mean(np.array([*centers]), axis=0)
-            center_predicted_std_ = np.std(np.array([*centers]), axis=0)
-            print(idx, center_predicted_mean*100, center_predicted_std*100, center_predicted_mean_*100, center_predicted_std_*100)
 
         breakpoint()
 

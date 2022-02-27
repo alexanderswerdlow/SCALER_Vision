@@ -1,5 +1,4 @@
 import numpy as np
-import pyrealsense2 as rs
 import cv2
 from util import rvec_2_euler, get_transformation
 from scipy.spatial.transform import Rotation as R
@@ -80,11 +79,16 @@ def get_d435_to_wall(frame, intrinsics, trans, rot, draw_frame=True):
         else:
             tvec = (tvec.flatten() * 10)
             tvec[0] *= -1
-            print(trans, tvec, tvec - trans)
+            #print(trans, tvec, tvec - trans)
             tvec = tvec - trans
+            #print(tvec)
+            tvec[0] = -0.01989264 + (0.0065)
+            tvec[1] = -0.02225 + (-0.009)
+            tvec[2] = 0
+            #print(tvec)
             rvec = R.from_rotvec(np.zeros(3)).as_quat()
             d435_to_wall = get_transformation(tvec, rvec)
-            d435_to_wall = np.eye(4)
+            # d435_to_wall = np.eye(4)
 
         
         #breakpoint()
