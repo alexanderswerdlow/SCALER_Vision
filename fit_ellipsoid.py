@@ -9,7 +9,6 @@ import pickle
 import argparse
 import numpy.linalg as la
 from scipy.spatial.transform import Rotation as R
-import matplotlib
 from util import get_transformation
 from aruco import get_d435_to_wall
 
@@ -90,7 +89,6 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
     pcds, rejected_masks = [], set()
     for idx, mask in enumerate(masks):
         if scores[idx] > min_score:
-
             detected_rgb_mask, detected_depth_mask = np.zeros_like(im), -np.ones_like(depth)
             detected_rgb_mask[mask], detected_depth_mask[mask] = im[mask], depth[mask]
 
@@ -146,10 +144,11 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
             continue
 
         if args.verbose:
-            # print(f"Fit for {idx} took {time.time() - start} for {len(points)} points")
             outer_ellipsoid.plot_ellipsoid(A, centroid, "green", ax)
             ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=np.asarray(cluster_pcd.colors), label=f"{idx}-pos(cm):{centroid*100}-ax:{axes*100*2}", alpha=0.8, s=0.1)
             ax.text(*centroid, f"{idx}", size=15, zorder=3, color="red")
+    
+    print(f"Fit + Project for {frame_key} took {time.time() - start}")
 
     if args.verbose:
         ax.view_init(elev=270, azim=270)
@@ -183,15 +182,29 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
 
     # For Aruco Tags
     global d435_to_wall
+    extrinsic = None
     if d435_to_wall is None:
-        d435_to_wall = get_d435_to_wall(color_image, intrinsic, rot)[0]
+        d435_to_wall, frame_aruco, aruco_centroid = get_d435_to_wall(color_image, intrinsic, trans, rot)
         if d435_to_wall is None:
             print("Failed to find aruco tag")
-            return None, None
+            return None, detection
+    else:
+        _, frame_aruco, aruco_centroid = get_d435_to_wall(color_image, intrinsic, trans, rot)
+
+    plt.imsave(f'output/aruco-{frame_key}.png', frame_aruco)
 
     extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat @ d435_to_wall # 
 
+    if aruco_centroid is not None:
+        detected_rgb_mask, detected_depth_mask = np.zeros_like(color_image), -np.ones_like(depth_image)
+        aruco_centroid = aruco_centroid.mean(axis=0)
+        detected_depth_mask[int(aruco_centroid[1]), int(aruco_centroid[0])] = depth_image[int(aruco_centroid[1]), int(aruco_centroid[0])]
+        pcd_aruco = rgbd_to_pcl(detected_rgb_mask, detected_depth_mask, (intrinsic, extrinsic), vis=False)
+        if len(np.asarray(pcd_aruco.points)) > 0:
+            aruco_locs.append(np.asarray(pcd_aruco.points)[0][:2])
+
     ellipsoids = cluster_and_fit(color_image, depth_image, (intrinsic, extrinsic), scores, boxes, masks)
+    
     if args.verbose:
         print(f"Frame {frame_key} took {time.time() - start}")
         plt.imsave(f"output/rgb-{frame_key}.png", color_image)
@@ -218,17 +231,16 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
         ax.set_zlim3d([0, 1])
         ax.view_init(elev=270, azim=270)
 
-    for idx, (center, A, pred_center, pred_axes) in enumerate(predictions):
-        if len(pred_center) > min_detections:
-            centroid_predicted = np.mean(np.array([*pred_center]), axis=0)
-            axes_predicted = np.mean(np.array([*pred_axes]), axis=0)
-            centroid_predicted_std = np.mean(np.array([*pred_center]), axis=0)
-            axes_predicted_std = np.mean(np.array([*pred_axes]), axis=0)
-            filtered_response.append((A, centroid_predicted, axes_predicted, centroid_predicted_std, axes_predicted_std))
-            if args.verbose:
+        for idx, (center, A, pred_center, pred_axes) in enumerate(predictions):
+            if len(pred_center) > min_detections:
+                centroid_predicted = np.mean(np.array([*pred_center]), axis=0)
+                axes_predicted = np.mean(np.array([*pred_axes]), axis=0)
+                centroid_predicted_std = np.std(np.array([*pred_center]), axis=0)
+                axes_predicted_std = np.std(np.array([*pred_axes]), axis=0)
+                filtered_response.append((A, centroid_predicted, axes_predicted, centroid_predicted_std, axes_predicted_std))
                 outer_ellipsoid.plot_ellipsoid(A, centroid_predicted, "green", ax)
-
-    if args.verbose:
+                print(idx, centroid_predicted_std*100)
+    
         plt.title(f"Detected {len(predictions)} handholds at pos: {trans*100}")
         plt.savefig(f"output/map-{frame_key}.png", dpi=300, bbox_inches="tight")
         ax.cla()
@@ -251,7 +263,7 @@ if __name__ == "__main__":
 
     if args.load_segmentation:
         try:
-            detections = pickle.load(open(f"{args.data_files}/generated/detections.p", "rb"))
+            detections = pickle.load(open(f"{args.data_files}/segmentation/{args.capture.rstrip('.npz')}.p", "rb"))
         except (OSError, IOError) as e:
             print("detections.p not found, exiting")
             exit()
@@ -283,19 +295,27 @@ if __name__ == "__main__":
         vis = o3d.visualization.Visualizer()
         vis.create_window()
 
+    # if args.verbose:
+    #     import os
+    #     import shutil
+
+    #     dir = 'output'
+    #     if os.path.exists(dir):
+    #         shutil.rmtree(dir)
+    #     os.makedirs(dir)
+
     predictions = []
     all_predictions = []
+    aruco_locs = []
     d435_to_wall = None
     if args.run_from_file:
         loaded = np.load(f"{args.data_files}/captures/{args.capture}", allow_pickle=True)
         frames = list(loaded.keys())
         print(len(frames))
 
-        for frame_key in frames[::10]:
+        for frame_key in frames:
             if frame_key == "0":
                 frame_key = "1"
-            # elif frame_key == "100":
-            #     break
 
             try:
                 color_image, depth_image, ir_image, intrinsic, trans, rot = loaded[frame_key]
@@ -308,16 +328,14 @@ if __name__ == "__main__":
             if args.save_segmentation:
                 detections[frame_key] = detection
 
-            if args.save_segmentation and frame_key == "9":
-                pickle.dump(detections, open(f"{args.data_files}/generated/detections.p", "wb"))
-                exit()
-
             if ellipsoids is None:
                 continue
 
-        # breakpoint()
-        from scipy.spatial import KDTree
+        if args.save_segmentation:
+            pickle.dump(detections, open(f"{args.data_files}/segmentation/{args.capture.rstrip('.npz')}.p", "wb"))
+            exit()
 
+        from scipy.spatial import KDTree
         in_to_m = 0.0254
         handhold_gt = np.array([[5, 0], [8, 4], [8, 9], [10, 12], [8, -4], [0, -5], [0, 5], [-6, -3], [-6, 3], [-17, -4], [-17, 2], [-14, 10]]).astype(np.float64)
         handhold_gt *= in_to_m
@@ -335,16 +353,28 @@ if __name__ == "__main__":
         plt.ylim(-20, 20)
         plt.savefig('output/centroid.png')
         plt.close()
-        
+
+        plt.figure()
+        for idx, (ar_loc) in enumerate(aruco_locs):
+            plt.scatter(*(ar_loc * 100), s=35)
+
+        plt.xlim(-10, 10)
+        plt.ylim(-10, 10)
+        plt.savefig('output/aruco_locs.png')
+        plt.close()
+
         for idx, detected_instances in handholds.items():
-            center_errors = []
+            center_errors, centers = [], []
             for center, axes, frame_rec in detected_instances:
                 center_errors.append(np.linalg.norm(handhold_gt[idx] - center[:2]))
+                centers.append(center[:2])
 
             center_predicted_mean = np.mean(np.array([*center_errors]), axis=0)
             center_predicted_std = np.std(np.array([*center_errors]), axis=0)
-            print(idx, center_predicted_mean*100, center_predicted_std*100)
-            
+            center_predicted_mean_ = np.mean(np.array([*centers]), axis=0)
+            center_predicted_std_ = np.std(np.array([*centers]), axis=0)
+            print(idx, center_predicted_mean*100, center_predicted_std*100, center_predicted_mean_*100, center_predicted_std_*100)
+
         breakpoint()
 
         if args.save_segmentation:
