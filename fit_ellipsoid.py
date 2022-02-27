@@ -31,13 +31,15 @@ Wall_Frame_to_T265_mat = np.array(
     ]
 )
 
+# Filtering params
 min_volume = 5e-5
 min_score = 0.95
-min_detections = 5
-min_dist_detection_clustering = 0.05
-handhold_voxel_downsample = 0.005
-fit_tolerance = 0.01
 min_axis_aligned_bounding_box_len = 0.075
+min_detections = 5
+
+min_dist_detection_clustering = 0.05
+handhold_voxel_downsample = 0.01
+fit_tolerance = 0.01
 
 
 def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
@@ -75,12 +77,7 @@ def segment_image(im):
 
     if args.verbose:
         print(f"Segmentation took {time.time() - start}")
-        v = Visualizer(
-            im[:, :, ::-1],
-            metadata=train_metadata,
-            scale=0.75,
-            instance_mode=ColorMode.IMAGE,
-        )
+        v = Visualizer(im[:, :, ::-1], metadata=train_metadata, scale=0.75, instance_mode=ColorMode.IMAGE)
         cv2.imwrite(f"output/climbnet-{frame_key}.png", v.draw_instance_predictions(results).get_image()[:, :, ::-1])
 
     return scores, boxes, masks
@@ -88,7 +85,8 @@ def segment_image(im):
 
 def cluster_and_fit(im, depth, param, scores, boxes, masks):
     """Create point cloud based on segmented masks, cluster, and fit ellipsoids"""
-    # Empty images to put detected regions
+
+    start = time.time()
     pcds, rejected_masks = [], set()
     for idx, mask in enumerate(masks):
         if scores[idx] > min_score:
@@ -106,9 +104,6 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
         else:
             rejected_masks.add(idx)
 
-    # Segment point cloud, returning (n,) array of labels
-    start = time.time()
-
     background_rgb, background_depth = im.copy(), depth.copy()  # Background images with detected regions removed
     for idx, mask in enumerate(masks):
         if idx not in rejected_masks:
@@ -118,7 +113,7 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
     pcd_background = rgbd_to_pcl(background_rgb, background_depth, param, vis=False).voxel_down_sample(voxel_size=0.005)
 
     if args.verbose:
-        print(f"Clustering points for frame {frame_key} took {time.time() - start}")
+        print(f"Projecting + Filtering points for frame {frame_key} took {time.time() - start}")
         fig = plt.figure(figsize=(12, 12))
         ax = fig.add_subplot(111, projection="3d")
 
@@ -151,7 +146,7 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
             continue
 
         if args.verbose:
-            print(f"Fit for {idx} took {time.time() - start} for {len(points)} points")
+            # print(f"Fit for {idx} took {time.time() - start} for {len(points)} points")
             outer_ellipsoid.plot_ellipsoid(A, centroid, "green", ax)
             ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=np.asarray(cluster_pcd.colors), label=f"{idx}-pos(cm):{centroid*100}-ax:{axes*100*2}", alpha=0.8, s=0.1)
             ax.text(*centroid, f"{idx}", size=15, zorder=3, color="red")
@@ -159,9 +154,9 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
     if args.verbose:
         ax.view_init(elev=270, azim=270)
         ax.set_xlim3d([-0.75, 0.75])
-        ax.set_ylim3d([-0.75, 0.75])
+        ax.set_ylim3d([0.75, -0.75])
         ax.set_zlim3d([0, 1])
-        plt.title(f"Detected {len(ellipsoids)} handholds")
+        plt.title(f"Detected {len(predictions)} handholds at pos: {trans*100}")
         plt.legend(loc="best")
         plt.savefig(f"output/3d-{frame_key}.png", dpi=500, bbox_inches="tight")
         ax.cla()
@@ -187,11 +182,14 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
     # extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat
 
     # For Aruco Tags
-    if (d435_to_wall := get_d435_to_wall(color_image, intrinsic)[0]) is None:
-        print("Failed to find aruco tag")
-        return None, None
+    global d435_to_wall
+    if d435_to_wall is None:
+        d435_to_wall = get_d435_to_wall(color_image, intrinsic, rot)[0]
+        if d435_to_wall is None:
+            print("Failed to find aruco tag")
+            return None, None
 
-    extrinsic = get_transformation(trans, rot) @ d435_to_wall
+    extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat @ d435_to_wall # 
 
     ellipsoids = cluster_and_fit(color_image, depth_image, (intrinsic, extrinsic), scores, boxes, masks)
     if args.verbose:
@@ -199,6 +197,7 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
         plt.imsave(f"output/rgb-{frame_key}.png", color_image)
 
     for A, centroid, _, axes in ellipsoids:
+        all_predictions.append((centroid, axes, int(frame_key)))
         found_match = False
         for idx, (center, A, pred_center, pred_axes) in enumerate(predictions):
             if np.abs(la.norm(center - centroid)) < min_dist_detection_clustering:
@@ -230,8 +229,8 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
                 outer_ellipsoid.plot_ellipsoid(A, centroid_predicted, "green", ax)
 
     if args.verbose:
-        plt.title(f"Detected {len(predictions)} handholds")
-        plt.savefig(f"output/map-{frame_key}.png", dpi=500, bbox_inches="tight")
+        plt.title(f"Detected {len(predictions)} handholds at pos: {trans*100}")
+        plt.savefig(f"output/map-{frame_key}.png", dpi=300, bbox_inches="tight")
         ax.cla()
         plt.close()
 
@@ -285,15 +284,18 @@ if __name__ == "__main__":
         vis.create_window()
 
     predictions = []
+    all_predictions = []
+    d435_to_wall = None
     if args.run_from_file:
         loaded = np.load(f"{args.data_files}/captures/{args.capture}", allow_pickle=True)
         frames = list(loaded.keys())
+        print(len(frames))
 
-        for frame_key in frames:
+        for frame_key in frames[::10]:
             if frame_key == "0":
-                continue
-            elif frame_key == "10":
-                break
+                frame_key = "1"
+            # elif frame_key == "100":
+            #     break
 
             try:
                 color_image, depth_image, ir_image, intrinsic, trans, rot = loaded[frame_key]
@@ -306,12 +308,44 @@ if __name__ == "__main__":
             if args.save_segmentation:
                 detections[frame_key] = detection
 
-            if args.save_segmentation and frame_key == "30":
+            if args.save_segmentation and frame_key == "9":
                 pickle.dump(detections, open(f"{args.data_files}/generated/detections.p", "wb"))
                 exit()
 
             if ellipsoids is None:
                 continue
+
+        # breakpoint()
+        from scipy.spatial import KDTree
+
+        in_to_m = 0.0254
+        handhold_gt = np.array([[5, 0], [8, 4], [8, 9], [10, 12], [8, -4], [0, -5], [0, 5], [-6, -3], [-6, 3], [-17, -4], [-17, 2], [-14, 10]]).astype(np.float64)
+        handhold_gt *= in_to_m
+        handhold_tree = KDTree(handhold_gt)
+
+        from collections import defaultdict
+        handholds = defaultdict(list)
+        plt.figure()
+        for idx, (center, axes, frame_rec) in enumerate(all_predictions):
+            dist, idx = handhold_tree.query(center[:2])
+            handholds[idx].append((center, axes, frame_rec))
+            plt.scatter(*(center[:2] * 39.3701))
+
+        plt.xlim(-20, 20)
+        plt.ylim(-20, 20)
+        plt.savefig('output/centroid.png')
+        plt.close()
+        
+        for idx, detected_instances in handholds.items():
+            center_errors = []
+            for center, axes, frame_rec in detected_instances:
+                center_errors.append(np.linalg.norm(handhold_gt[idx] - center[:2]))
+
+            center_predicted_mean = np.mean(np.array([*center_errors]), axis=0)
+            center_predicted_std = np.std(np.array([*center_errors]), axis=0)
+            print(idx, center_predicted_mean*100, center_predicted_std*100)
+            
+        breakpoint()
 
         if args.save_segmentation:
             pickle.dump(detections, open(f"{args.data_files}/generated/detections.p", "wb"))

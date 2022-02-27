@@ -15,7 +15,7 @@ def view():
     cv2.waitKey(1)
 
 
-def get_d435_to_wall(frame, intrinsics, draw_frame=False):
+def get_d435_to_wall(frame, intrinsics, rot, draw_frame=False):
 
     """
     frame - Frame from the video stream
@@ -51,9 +51,28 @@ def get_d435_to_wall(frame, intrinsics, draw_frame=False):
                 cv2.aruco.drawAxis(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, 0.01)  # Draw Axis
 
     if rvec is not None:
-        tvec = -tvec.flatten() * 10
-        rvec = rvec_2_euler(np.zeros(3)).flatten()  # rvec_2_euler(rvec.flatten()).flatten()
-        d435_to_wall = get_transformation(tvec, rvec)
+
+        use_rot = False
+
+        if use_rot:
+            from scipy.spatial.transform import Rotation as R
+
+            tvec = -tvec.flatten() * 10
+            tvec[1] *= -1
+
+            # euler_rvec = R.from_rotvec(rvec.flatten()).as_euler("xyz").flatten()
+            # euler_rvec[2] *= -1
+            # quat_rvec = R.from_euler("xyz", euler_rvec).as_quat()
+
+            d435_to_wall = get_transformation(tvec, rot)
+            # breakpoint()
+        else:
+            tvec = -tvec.flatten() * 10
+            tvec[1] *= -1
+            rvec = rvec_2_euler(np.zeros(3)).flatten()
+            d435_to_wall = get_transformation(tvec, rvec)
+
+        #breakpoint()
     else:
         d435_to_wall = None
 
