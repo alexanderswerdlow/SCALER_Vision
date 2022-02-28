@@ -185,31 +185,21 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
             return None, None
         scores, boxes, masks = detection
 
-    # For T265
+    # For T265 Only
     # extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat
 
     # For Aruco Tags
     global d435_to_wall
     extrinsic = None
     if d435_to_wall is None:
-        d435_to_wall, _, _ = get_d435_to_wall(color_image, intrinsic, trans, rot)
+        d435_to_wall, _ = get_d435_to_wall(color_image, intrinsic, trans, rot, frame_key)
         if d435_to_wall is None:
             print("Failed to find aruco tag")
             return None, detection
-    # else:
-    #     _, frame_aruco, aruco_centroid = get_d435_to_wall(color_image, intrinsic, trans, rot)
+    else:
+        get_d435_to_wall(color_image, intrinsic, trans, rot, frame_key)
 
     extrinsic = d435_to_wall @ get_transformation(trans, rot) @ T265_to_D435_mat# 
-
-    # if aruco_centroid is not None:
-    #     plt.imsave(f'output/aruco-{frame_key}.png', frame_aruco)
-    #     detected_rgb_mask, detected_depth_mask = np.zeros_like(color_image), -np.ones_like(depth_image)
-    #     aruco_centroid = aruco_centroid.mean(axis=0)
-    #     detected_depth_mask[int(aruco_centroid[1]), int(aruco_centroid[0])] = depth_image[int(aruco_centroid[1]), int(aruco_centroid[0])]
-    #     pcd_aruco = rgbd_to_pcl(detected_rgb_mask, detected_depth_mask, (intrinsic, extrinsic), vis=False)
-    #     if len(np.asarray(pcd_aruco.points)) > 0:
-    #         aruco_locs.append(np.asarray(pcd_aruco.points)[0][:2])
-
     ellipsoids = cluster_and_fit(color_image, depth_image, (intrinsic, extrinsic), scores, boxes, masks)
     
     if args.verbose:
@@ -220,7 +210,6 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
         all_predictions.append((centroid, axes, int(frame_key)))
 
     filtered_response = []
-
     handholds.clear()
     for idx, (center, axes, frame_rec) in enumerate(all_predictions):
         dist, idx = handhold_tree.query(center[:2])
@@ -236,13 +225,11 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
             centers.append(center[:2]*100)
             all_centers.append(center[:2]*100)
             all_euc_err.append(np.linalg.norm(handhold_gt[idx] - center[:2])*100)
-            print(np.linalg.norm(handhold_gt[idx] - center[:2])*100)
 
         print(f'GT for {idx}: {100*handhold_gt[idx]}, Center: {get_mean_std(centers)}, Err: {get_mean_std(center_errors)}')
 
     if len(handholds) > 0:  
         print(f"GT Overall Err: Euclidean: {get_mean_std(all_euc_err)}, X,Y: {get_mean_std(all_err)}")
-        #breakpoint()
 
     #if args.verbose:
         # fig = plt.figure(figsize=(12, 12))
@@ -251,8 +238,6 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
         # ax.set_ylim3d([-0.5, 0.5])
         # ax.set_zlim3d([0, 1])
         # ax.view_init(elev=270, azim=270)
-
-        
 
         # print(f"Abs Overall X,Y: {get_mean_std(all_centers)}")
         # plt.title(f"Detected {len(ellipsoids)} handholds at pos: {trans*100}")
@@ -318,9 +303,7 @@ if __name__ == "__main__":
     #         shutil.rmtree(dir)
     #     os.makedirs(dir)
 
-    predictions = []
     all_predictions = []
-    aruco_locs = []
     d435_to_wall = None
     from scipy.spatial import KDTree
     in_to_m = 0.0254
@@ -336,8 +319,6 @@ if __name__ == "__main__":
         print(len(frames))
 
         for frame_key in frames:
-            # if int(frame_key) < 10:
-            #     continue
 
             try:
                 color_image, depth_image, ir_image, intrinsic, trans, rot = loaded[frame_key]
@@ -357,26 +338,9 @@ if __name__ == "__main__":
             pickle.dump(detections, open(f"{args.data_files}/segmentation/{args.capture.rstrip('.npz')}.p", "wb"))
             exit()
 
-        
-        plt.figure()
-        for idx, (center, axes, frame_rec) in enumerate(all_predictions):
-            dist, idx = handhold_tree.query(center[:2])
-            handholds[idx].append((center, axes, frame_rec))
-            plt.scatter(*(center[:2] * 39.3701))
-
-        plt.xlim(-20, 20)
-        plt.ylim(-20, 20)
-        plt.savefig('output/centroid.png')
-        plt.close()
-
-        plt.figure()
-        for idx, (ar_loc) in enumerate(aruco_locs):
-            plt.scatter(*(ar_loc * 100), s=35)
-
-        plt.xlim(-10, 10)
-        plt.ylim(-10, 10)
-        plt.savefig('output/aruco_locs.png')
-        plt.close()
+        import pickle
+        with open('data_files/generated/predictions.p', 'wb') as handle:
+            pickle.dump(all_predictions, handle)
 
         breakpoint()
 

@@ -2,6 +2,11 @@ import numpy as np
 import cv2
 from util import rvec_2_euler, get_transformation
 from scipy.spatial.transform import Rotation as R
+import numpy as np
+import cv2
+import cv2.aruco as aruco
+import matplotlib.pyplot as plt
+np.set_printoptions(precision=3, suppress=True)
 
 
 def view():
@@ -14,8 +19,161 @@ def view():
     cv2.imshow("RealSense", images)
     cv2.waitKey(1)
 
+def get_multi_tags(img, frame_key):
+    draw_img = img.copy()
+    from sklearn.neighbors import KDTree
+    K = np.array([[886.50658842, 0.0, 643.11152258], [0.0, 889.00345804, 363.11086262], [0.0, 0.0, 1.0]])
 
-def get_d435_to_wall(frame, intrinsics, trans, rot, draw_frame=True):
+    dist = np.array([[0.12163025, -0.35153439, 0.00296531, -0.00498172, 0.27180912]])
+
+    tag_size_pixels = 1000
+
+    arucoDict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_7X7_50)
+    arucoParams = cv2.aruco.DetectorParameters_create()
+    arucoParams.cornerRefinementMethod = aruco.CORNER_REFINE_SUBPIX
+    
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    (aruco_tag_corners, ids, rejected) = cv2.aruco.detectMarkers(gray, arucoDict, parameters=arucoParams)
+
+    aruco_tag_corners = np.array(aruco_tag_corners)
+
+    
+
+
+    def find_holomography(corners, tag_size_pixels):
+        src_pts = corners
+        dst_pts = np.array([[0, tag_size_pixels], [tag_size_pixels, tag_size_pixels], [tag_size_pixels, 0], [0, 0]])
+
+        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+        return M
+
+
+    def detect_features(image, max_num_features=500, threshold=0.001, min_distance=3):
+        detected_corners = cv2.goodFeaturesToTrack(image, max_num_features, threshold, min_distance)
+        winSize = (5, 5)
+        zeroZone = (-1, -1)
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TermCriteria_COUNT, 40, 0.001)
+        # Calculate the refined corner locations
+        detected_corners = cv2.cornerSubPix(image, detected_corners, winSize, zeroZone, criteria)
+        return detected_corners
+
+
+    def load_tag(tag_number, tag_size_pixels):
+        arucoDict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_7X7_50)  # Fixed typo
+        tag = np.zeros((tag_size_pixels, tag_size_pixels, 1), dtype="uint8")
+        cv2.aruco.drawMarker(arucoDict, tag_number, tag_size_pixels, tag, 1)
+        tag = tag.squeeze()
+        return tag
+
+
+    def match_features(detected_features_image_transformed, detected_features_tag):
+        X = detected_features_image_transformed.squeeze()  # 10 points in 3 dimensions
+        tree = KDTree(X, leaf_size=2)
+
+        detected_features_tag = detected_features_tag.squeeze()
+
+        points_3d = []
+        points_2d = []
+
+        for i in range(detected_features_tag.shape[0]):
+            dist, ind = tree.query(detected_features_tag[i].reshape((1, -1)), k=1)
+            points_3d.append(detected_features_tag[i])
+            points_2d.append(detected_features_image[int(ind)])
+
+        points_3d = np.array(points_3d)
+        points_2d = np.array(points_2d)
+        points_2d = points_2d.squeeze()
+
+        points_3d /= tag_size_pixels
+
+        return (points_2d, points_3d)
+
+
+    should_plot = False
+    offsets = {0: np.array([-14, 0]), 1: np.array([-7, 6]), 3: np.array([0, -2]), 4: np.array([12, 5])}
+    points_3d_all, points_2d_all = [], []
+    if ids is None:
+        return np.zeros(3), np.zeros(4)
+    for tag_index in range(len(ids)):
+        # cv2.aruco.drawDetectedMarkers(draw_img, aruco_tag_corners[tag_index].reshape(4, 2))
+        tag_number = int(ids[tag_index])
+
+        M = find_holomography(aruco_tag_corners[tag_index, :, :], tag_size_pixels)
+
+        detected_features_image = detect_features(gray)
+
+        if should_plot:
+            plt.rcParams["figure.figsize"] = [20, 20]
+            for i in detected_features_image:
+                x, y = i.ravel()
+                plt.scatter(x, y)
+            plt.imshow(img[:, :, ::-1])
+            plt.savefig(f"plot-{tag_index}.png")
+
+        detected_features_image_transformed = cv2.perspectiveTransform(detected_features_image, M)
+        detected_features_image_transformed[:, :, 1] = tag_size_pixels - detected_features_image_transformed[:, :, 1]
+        tag = load_tag(tag_number, tag_size_pixels)
+        detected_features_tag = detect_features(tag, max_num_features=500, threshold=0.1, min_distance=50)
+        detected_features_tag[:, :, 1] = tag_size_pixels - detected_features_tag[:, :, 1]
+
+        if should_plot:
+            for feature in detected_features_image_transformed:
+                x, y = feature.ravel()
+                plt.scatter(x, y, color="r", alpha=0.5, s=1_000)
+
+            for feature in detected_features_tag:
+                x, y = feature.ravel()
+                plt.scatter(x, y, color="b", alpha=0.5, s=1_000)
+
+            plt.imshow(tag, cmap="gray")
+            plt.savefig(f"plot2-{tag_index}.png")
+
+        points_2d_interior, points_3d_interior = match_features(detected_features_image_transformed, detected_features_tag)
+
+        points_3d_exterior = np.array([[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]])
+
+        points_2d_exterior = aruco_tag_corners[tag_index, :, :].squeeze()
+
+        points_3d = np.vstack([points_3d_exterior, points_3d_interior])
+        points_2d = np.vstack([points_2d_exterior, points_2d_interior])
+        points_3d = np.hstack([points_3d, np.zeros((points_3d.shape[0], 1))]) * 0.1
+
+        if should_plot:
+            plt.scatter(points_3d[:, 0], points_3d[:, 1])
+            plt.savefig(f"plot3-{tag_index}.png")
+
+        points_3d[:, :2] += (offsets[tag_number] * 0.0254) + np.array([0, -16 * 0.0254])
+        points_3d_all.append(points_3d)
+        points_2d_all.append(points_2d)
+
+
+    points_3d_global, points_2d_global = points_3d_all.pop(), points_2d_all.pop()
+
+    for i, j in zip(points_3d_all, points_2d_all):
+        points_3d_global = np.vstack([points_3d_global, i])
+        points_2d_global = np.vstack([points_2d_global, j])
+
+    if should_plot:
+        plt.figure()
+        plt.scatter(points_3d_global[:, 0]*39.37007874, points_3d_global[:, 1]*39.37007874)
+        plt.xlim(-15, 15)
+        plt.ylim(-15, 15)
+        plt.savefig(f"plot_all.png")
+
+    
+
+    ret, rvec, tvec, inliers = cv2.solvePnPRansac(objectPoints=points_3d, imagePoints=points_2d, cameraMatrix=K, distCoeffs=dist, reprojectionError=1, iterationsCount=2000)
+
+    cv2.aruco.drawAxis(draw_img, K, dist, rvec, tvec, 0.1)
+    plt.imsave(f'output/axis-{frame_key}.png', draw_img)
+
+
+    rot_aruco = R.from_rotvec(rvec[:, 0]).as_quat()
+    t = np.array(tvec).flatten()
+    return t, rot_aruco
+
+def get_d435_to_wall(frame, intrinsics, trans, rot, frame_key, draw_frame=True):
 
     """
     frame - Frame from the video stream
@@ -26,35 +184,35 @@ def get_d435_to_wall(frame, intrinsics, trans, rot, draw_frame=True):
     frame - The frame with the axis drawn on it
     """
 
-    if draw_frame:
-        frame = np.copy(frame)
+    # if draw_frame:
+    #     frame = np.copy(frame)
 
-    aruco_dict_type = cv2.aruco.DICT_5X5_1000
-    matrix_coefficients = np.array([[intrinsics[2], 0, intrinsics[4]], [0, intrinsics[3], intrinsics[5]], [0, 0, 1]])
-    distortion_coefficients = np.zeros((1, 5))
+    # aruco_dict_type = cv2.aruco.DICT_5X5_1000
+    # matrix_coefficients = np.array([[intrinsics[2], 0, intrinsics[4]], [0, intrinsics[3], intrinsics[5]], [0, 0, 1]])
+    # distortion_coefficients = np.zeros((1, 5))
 
-    matrix_coefficients = np.array([[882.63940102, 0.0, 637.29136233], [0.0, 885.00533948, 365.28868425], [0.0, 0.0, 1.0]])
+    # matrix_coefficients = np.array([[882.63940102, 0.0, 637.29136233], [0.0, 885.00533948, 365.28868425], [0.0, 0.0, 1.0]])
 
-    distortion_coefficients = np.array([[0.12041179, -0.38617633, 0.00104598, -0.00789058, 0.35420179]])
+    # distortion_coefficients = np.array([[0.12041179, -0.38617633, 0.00104598, -0.00789058, 0.35420179]])
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    cv2.aruco_dict = cv2.aruco.Dictionary_get(aruco_dict_type)
-    parameters = cv2.aruco.DetectorParameters_create()
+    # gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # cv2.aruco_dict = cv2.aruco.Dictionary_get(aruco_dict_type)
+    # parameters = cv2.aruco.DetectorParameters_create()
 
-    corners, ids, _ = cv2.aruco.detectMarkers(gray, cv2.aruco_dict, parameters=parameters, cameraMatrix=matrix_coefficients, distCoeff=distortion_coefficients)
-    tvec, rvec = None, None
-    centroid_aruco = None
+    # corners, ids, _ = cv2.aruco.detectMarkers(gray, cv2.aruco_dict, parameters=parameters, cameraMatrix=matrix_coefficients, distCoeff=distortion_coefficients)
+    # tvec, rvec = None, None
+    # centroid_aruco = None
 
-    if len(corners) > 0:  # If markers are detected
-        centroid_aruco = corners[0].mean(axis=0)
-        for i in range(0, len(ids)):
-            # Estimate pose of each marker and return the values rvec and tvec---(different from those of camera coefficients)
-            # The marker corrdinate system is centered on the middle of the marker
-            rvec, tvec, _ = cv2.aruco.estimatePoseSingleMarkers(corners[i], 0.01, matrix_coefficients, distortion_coefficients)
+    # if len(corners) > 0:  # If markers are detected
+    #     centroid_aruco = corners[0].mean(axis=0)
+    #     for i in range(0, len(ids)):
+    #         # Estimate pose of each marker and return the values rvec and tvec---(different from those of camera coefficients)
+    #         # The marker corrdinate system is centered on the middle of the marker
+    #         rvec, tvec, _ = cv2.aruco.estimatePoseSingleMarkers(corners[i], 0.01, matrix_coefficients, distortion_coefficients)
 
-            if draw_frame:
-                cv2.aruco.drawDetectedMarkers(frame, corners)  # Draw a square around the markers
-                cv2.aruco.drawAxis(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, 0.01)  # Draw Axis
+    #         if draw_frame:
+    #             cv2.aruco.drawDetectedMarkers(frame, corners)  # Draw a square around the markers
+    #             cv2.aruco.drawAxis(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, 0.01)  # Draw Axis
 
     
 
@@ -100,20 +258,9 @@ def get_d435_to_wall(frame, intrinsics, trans, rot, draw_frame=True):
 
         # TODO: Something with the rotation needs to be flipped, either in rvec, transformer or both
         # 2022_02_27-09_48_26_PM.npz
-        # From Aruco Data in D435 Frame
-        tvec = -np.array([[0.062],[-0.238],[1.064]])
-        rvec = np.array([-0.066,  0.055, -0.009,  0.996])
-        rvec = R.from_quat(rvec).as_euler('xyz')
-        rvec[0] *= 1
-        rvec[1] *= 1
-        rvec[2] *= 1
-        rvec = R.from_euler('xyz', rvec).as_quat()
-
-
-        transformer = np.eye(4)
-        transformer[0,0] = 1
-        transformer[1,1] = -1
-        transformer[2,2] = 1
+        tvec, rot_aruco = get_multi_tags(frame.copy(), frame_key)
+        tvec_init = np.array([0.066, 0.292, 1.01 ])
+        transformer = np.array([[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]])
 
         T265_to_D435_mat = np.array(
             [
@@ -124,10 +271,9 @@ def get_d435_to_wall(frame, intrinsics, trans, rot, draw_frame=True):
             ]
         )
 
-
-        
-
-        d435_to_wall = get_transformation(tvec.flatten(), rvec.flatten()) @ transformer @ np.linalg.inv(T265_to_D435_mat) @ np.linalg.inv(get_transformation(trans, rot))
+        tvec[1] += 5.5 * 0.0254
+        print(tvec, np.linalg.norm((tvec_init - tvec) - trans))
+        d435_to_wall = get_transformation(tvec.flatten(), rot_aruco.flatten()) @ transformer @ np.linalg.inv(T265_to_D435_mat) @ np.linalg.inv(get_transformation(trans, rot))
 
 
         # 2/27 5:43 - 7PM
@@ -141,7 +287,7 @@ def get_d435_to_wall(frame, intrinsics, trans, rot, draw_frame=True):
         # rvec = R.from_rotvec(np.zeros(3)).as_quat()
         # d435_to_wall = get_transformation(tvec, rvec)
 
-    return d435_to_wall, frame, centroid_aruco
+    return d435_to_wall, frame
 
 
 if __name__ == "__main__":
