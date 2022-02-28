@@ -3,7 +3,6 @@ import numpy as np
 import cv2
 import cv2.aruco as aruco
 import glob
-import d435_sub
 
 def calibrate(square_size=0.022):
     """ Apply camera calibration operation for images in the given directory path.
@@ -21,15 +20,10 @@ def calibrate(square_size=0.022):
     objpoints = []  # 3d point in real world space
     imgpoints = []  # 2d points in image plane.
 
-    # data_files/captures/2022_02_27-03_28_31_PM.npz
-    # data_files/captures/2022_02_27-03_27_19_PM.npz
-    # loaded = np.load(f"data_files/captures/2022_02_27-03_28_31_PM.npz", allow_pickle=True)
-    # frames = list(loaded.keys())
-    # print(len(frames))
+    images = glob.glob('images/**')
 
-    for i in range(30):
-        test = input('press to take picture')
-        img, depth_image, ir_image, intrinsic, trans, rot = d435_sub.get_rgbd()
+    for fname in images:
+        img = cv2.imread(fname)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
         # Find the chess board corners

@@ -3,6 +3,7 @@ import cv2
 from util import rvec_2_euler, get_transformation
 from scipy.spatial.transform import Rotation as R
 
+
 def view():
     depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
     ir_colormap = cv2.applyColorMap(cv2.convertScaleAbs(ir_image, alpha=0.03), cv2.COLORMAP_JET)
@@ -32,6 +33,10 @@ def get_d435_to_wall(frame, intrinsics, trans, rot, draw_frame=True):
     matrix_coefficients = np.array([[intrinsics[2], 0, intrinsics[4]], [0, intrinsics[3], intrinsics[5]], [0, 0, 1]])
     distortion_coefficients = np.zeros((1, 5))
 
+    matrix_coefficients = np.array([[882.63940102, 0.0, 637.29136233], [0.0, 885.00533948, 365.28868425], [0.0, 0.0, 1.0]])
+
+    distortion_coefficients = np.array([[0.12041179, -0.38617633, 0.00104598, -0.00789058, 0.35420179]])
+
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     cv2.aruco_dict = cv2.aruco.Dictionary_get(aruco_dict_type)
     parameters = cv2.aruco.DetectorParameters_create()
@@ -39,7 +44,6 @@ def get_d435_to_wall(frame, intrinsics, trans, rot, draw_frame=True):
     corners, ids, _ = cv2.aruco.detectMarkers(gray, cv2.aruco_dict, parameters=parameters, cameraMatrix=matrix_coefficients, distCoeff=distortion_coefficients)
     tvec, rvec = None, None
     centroid_aruco = None
-    
 
     if len(corners) > 0:  # If markers are detected
         centroid_aruco = corners[0].mean(axis=0)
@@ -47,7 +51,6 @@ def get_d435_to_wall(frame, intrinsics, trans, rot, draw_frame=True):
             # Estimate pose of each marker and return the values rvec and tvec---(different from those of camera coefficients)
             # The marker corrdinate system is centered on the middle of the marker
             rvec, tvec, _ = cv2.aruco.estimatePoseSingleMarkers(corners[i], 0.01, matrix_coefficients, distortion_coefficients)
-            
 
             if draw_frame:
                 cv2.aruco.drawDetectedMarkers(frame, corners)  # Draw a square around the markers
@@ -67,31 +70,29 @@ def get_d435_to_wall(frame, intrinsics, trans, rot, draw_frame=True):
             # euler_rvec = R.from_rotvec(rvec.flatten()).as_euler("xyz").flatten()
             # euler_rvec[0] *= -1
             # quat_rvec = R.from_euler("xyz", euler_rvec).as_quat()
-            flip_yz = np.array([
-                [1, 0, 0, 0],
-                [0, -1, 0, 0],
-                [0, 0, -1, 0],
-                [0, 0, 0, 1]
-            ])
+            flip_yz = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
 
             d435_to_wall = get_transformation(tvec, rvec) @ flip_yz
 
         else:
-            tvec = (tvec.flatten() * 10)
+            # tvec = tvec.flatten() * 10
+            # tvec[0] *= -1
+            # # print(trans, tvec, tvec - trans)
+            # tvec = tvec - trans
+            # # print(tvec)
+            # tvec[0] = -0.01989264 + (0.0065)
+            # tvec[1] = -0.02225 + (-0.009)
+            # tvec[2] = 0
+            # # print(tvec)
+            # rvec = R.from_rotvec(np.zeros(3)).as_quat()
+            # d435_to_wall = get_transformation(tvec, rvec)
+
+            tvec = tvec.flatten() * 10
             tvec[0] *= -1
-            #print(trans, tvec, tvec - trans)
-            tvec = tvec - trans
-            #print(tvec)
-            tvec[0] = -0.01989264 + (0.0065)
-            tvec[1] = -0.02225 + (-0.009)
-            tvec[2] = 0
-            #print(tvec)
             rvec = R.from_rotvec(np.zeros(3)).as_quat()
             d435_to_wall = get_transformation(tvec, rvec)
-            # d435_to_wall = np.eye(4)
 
-        
-        #breakpoint()
+        # breakpoint()
 
     else:
         d435_to_wall = None
