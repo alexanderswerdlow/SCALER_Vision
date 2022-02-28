@@ -30,6 +30,8 @@ Wall_Frame_to_T265_mat = np.array(
     ]
 )
 
+np.set_printoptions(suppress=True, precision=3)
+
 # Filtering params
 min_volume = 5e-5
 min_score = 0.95
@@ -190,24 +192,23 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
     global d435_to_wall
     extrinsic = None
     if d435_to_wall is None:
-        d435_to_wall, frame_aruco, aruco_centroid = get_d435_to_wall(color_image, intrinsic, trans, rot)
+        d435_to_wall, _, _ = get_d435_to_wall(color_image, intrinsic, trans, rot)
         if d435_to_wall is None:
             print("Failed to find aruco tag")
             return None, detection
-    else:
-        _, frame_aruco, aruco_centroid = get_d435_to_wall(color_image, intrinsic, trans, rot)
+    # else:
+    #     _, frame_aruco, aruco_centroid = get_d435_to_wall(color_image, intrinsic, trans, rot)
 
-    plt.imsave(f'output/aruco-{frame_key}.png', frame_aruco)
+    extrinsic = d435_to_wall @ get_transformation(trans, rot) @ T265_to_D435_mat# 
 
-    extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat @ d435_to_wall # 
-
-    if aruco_centroid is not None:
-        detected_rgb_mask, detected_depth_mask = np.zeros_like(color_image), -np.ones_like(depth_image)
-        aruco_centroid = aruco_centroid.mean(axis=0)
-        detected_depth_mask[int(aruco_centroid[1]), int(aruco_centroid[0])] = depth_image[int(aruco_centroid[1]), int(aruco_centroid[0])]
-        pcd_aruco = rgbd_to_pcl(detected_rgb_mask, detected_depth_mask, (intrinsic, extrinsic), vis=False)
-        if len(np.asarray(pcd_aruco.points)) > 0:
-            aruco_locs.append(np.asarray(pcd_aruco.points)[0][:2])
+    # if aruco_centroid is not None:
+    #     plt.imsave(f'output/aruco-{frame_key}.png', frame_aruco)
+    #     detected_rgb_mask, detected_depth_mask = np.zeros_like(color_image), -np.ones_like(depth_image)
+    #     aruco_centroid = aruco_centroid.mean(axis=0)
+    #     detected_depth_mask[int(aruco_centroid[1]), int(aruco_centroid[0])] = depth_image[int(aruco_centroid[1]), int(aruco_centroid[0])]
+    #     pcd_aruco = rgbd_to_pcl(detected_rgb_mask, detected_depth_mask, (intrinsic, extrinsic), vis=False)
+    #     if len(np.asarray(pcd_aruco.points)) > 0:
+    #         aruco_locs.append(np.asarray(pcd_aruco.points)[0][:2])
 
     ellipsoids = cluster_and_fit(color_image, depth_image, (intrinsic, extrinsic), scores, boxes, masks)
     
@@ -217,60 +218,47 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
 
     for A, centroid, _, axes in ellipsoids:
         all_predictions.append((centroid, axes, int(frame_key)))
-        found_match = False
-        for idx, (center, A, pred_center, pred_axes) in enumerate(predictions):
-            if np.abs(la.norm(center - centroid)) < min_dist_detection_clustering:
-                predictions[idx][2].append(centroid)
-                predictions[idx][3].append(axes)
-                found_match = True
-                break
-
-        if not found_match:
-            predictions.append((centroid, A, [centroid], [axes]))
 
     filtered_response = []
-    if args.verbose:
-        fig = plt.figure(figsize=(12, 12))
-        ax = fig.add_subplot(111, projection="3d")
-        ax.set_xlim3d([-1, 1])
-        ax.set_ylim3d([-0.5, 0.5])
-        ax.set_zlim3d([0, 1])
-        ax.view_init(elev=270, azim=270)
 
-        # for idx, (center, A, pred_center, pred_axes) in enumerate(predictions):
-        #     if len(pred_center) > min_detections:
-        #         centroid_predicted = np.mean(np.array([*pred_center]), axis=0)
-        #         axes_predicted = np.mean(np.array([*pred_axes]), axis=0)
-        #         centroid_predicted_std = np.std(np.array([*pred_center]), axis=0)
-        #         axes_predicted_std = np.std(np.array([*pred_axes]), axis=0)
-        #         filtered_response.append((A, centroid_predicted, axes_predicted, centroid_predicted_std, axes_predicted_std))
-        #         outer_ellipsoid.plot_ellipsoid(A, centroid_predicted, "green", ax)
-        #         # print('abs', idx, centroid_predicted_std*100)
-
-        handholds.clear()
-        for idx, (center, axes, frame_rec) in enumerate(all_predictions):
-            dist, idx = handhold_tree.query(center[:2])
+    handholds.clear()
+    for idx, (center, axes, frame_rec) in enumerate(all_predictions):
+        dist, idx = handhold_tree.query(center[:2])
+        if dist < 0.05:
             handholds[idx].append((center, axes, frame_rec))
 
-        all_err, all_euc_err, all_centers = [], [], []
-        for idx, detected_instances in handholds.items():
-            center_errors, centers = [], []
-            for center, axes, frame_rec in detected_instances:
-                center_errors.append(np.linalg.norm(handhold_gt[idx] - center[:2])*100)
-                all_err.append(handhold_gt[idx] - center[:2]*100)
-                centers.append(center[:2]*100)
-                all_centers.append(center[:2]*100)
-                all_euc_err.append(np.linalg.norm(handhold_gt[idx] - center[:2])*100)
+    all_err, all_euc_err, all_centers = [], [], []
+    for idx, detected_instances in handholds.items():
+        center_errors, centers = [], []
+        for center, axes, frame_rec in detected_instances:
+            center_errors.append(np.linalg.norm(handhold_gt[idx] - center[:2])*100)
+            all_err.append((handhold_gt[idx] - center[:2])*100)
+            centers.append(center[:2]*100)
+            all_centers.append(center[:2]*100)
+            all_euc_err.append(np.linalg.norm(handhold_gt[idx] - center[:2])*100)
+            print(np.linalg.norm(handhold_gt[idx] - center[:2])*100)
 
-            print(f'GT for {idx}, Err: {get_mean_std(center_errors)}, Center: {get_mean_std(centers)}')
-            
+        print(f'GT for {idx}: {100*handhold_gt[idx]}, Center: {get_mean_std(centers)}, Err: {get_mean_std(center_errors)}')
+
+    if len(handholds) > 0:  
         print(f"GT Overall Err: Euclidean: {get_mean_std(all_euc_err)}, X,Y: {get_mean_std(all_err)}")
-        print(f"Abs Overall X,Y: {get_mean_std(all_centers)}")
+        #breakpoint()
 
-        plt.title(f"Detected {len(predictions)} handholds at pos: {trans*100}")
-        plt.savefig(f"output/map-{frame_key}.png", dpi=300, bbox_inches="tight")
-        ax.cla()
-        plt.close()
+    #if args.verbose:
+        # fig = plt.figure(figsize=(12, 12))
+        # ax = fig.add_subplot(111, projection="3d")
+        # ax.set_xlim3d([-1, 1])
+        # ax.set_ylim3d([-0.5, 0.5])
+        # ax.set_zlim3d([0, 1])
+        # ax.view_init(elev=270, azim=270)
+
+        
+
+        # print(f"Abs Overall X,Y: {get_mean_std(all_centers)}")
+        # plt.title(f"Detected {len(ellipsoids)} handholds at pos: {trans*100}")
+        # plt.savefig(f"output/map-{frame_key}.png", dpi=300, bbox_inches="tight")
+        # ax.cla()
+        # plt.close()
 
     return filtered_response, detection
 
@@ -348,10 +336,8 @@ if __name__ == "__main__":
         print(len(frames))
 
         for frame_key in frames:
-            if frame_key == "0":
-                frame_key = "1"
-            elif int(frame_key) <= 16:
-                continue
+            # if int(frame_key) < 10:
+            #     continue
 
             try:
                 color_image, depth_image, ir_image, intrinsic, trans, rot = loaded[frame_key]

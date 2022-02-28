@@ -36,3 +36,8 @@ Wall Frame (Viewing in front of wall):
 - Take each mask from segmentation and project that mask into a point cloud using camera intrinsics
 - Filter point clouds by segmentation score, bounding box size, etc.
 - Perform Ellipsoid Fitting on each point cloud
+
+
+## Testing
+
+python fit_ellipsoid.py --run_from_file --capture 2022_02_26-06_52_39_PM.npz

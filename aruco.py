@@ -56,46 +56,90 @@ def get_d435_to_wall(frame, intrinsics, trans, rot, draw_frame=True):
                 cv2.aruco.drawDetectedMarkers(frame, corners)  # Draw a square around the markers
                 cv2.aruco.drawAxis(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, 0.01)  # Draw Axis
 
-    if rvec is not None:
+    
 
-        use_rot = False
+    use_rot = False
 
-        if use_rot:
-            tvec = -tvec.flatten() * 10
-            tvec[1] *= -1
+    if use_rot:
+        tvec = -tvec.flatten() * 10
+        tvec[1] *= -1
 
+        if rvec is not None:
             rvec = rvec.flatten()
             rvec = R.from_rotvec(rvec).as_quat()
 
-            # euler_rvec = R.from_rotvec(rvec.flatten()).as_euler("xyz").flatten()
-            # euler_rvec[0] *= -1
-            # quat_rvec = R.from_euler("xyz", euler_rvec).as_quat()
-            flip_yz = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        # euler_rvec = R.from_rotvec(rvec.flatten()).as_euler("xyz").flatten()
+        # euler_rvec[0] *= -1
+        # quat_rvec = R.from_euler("xyz", euler_rvec).as_quat()
+        flip_yz = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
 
-            d435_to_wall = get_transformation(tvec, rvec) @ flip_yz
-
-        else:
-            # tvec = tvec.flatten() * 10
-            # tvec[0] *= -1
-            # # print(trans, tvec, tvec - trans)
-            # tvec = tvec - trans
-            # # print(tvec)
-            # tvec[0] = -0.01989264 + (0.0065)
-            # tvec[1] = -0.02225 + (-0.009)
-            # tvec[2] = 0
-            # # print(tvec)
-            # rvec = R.from_rotvec(np.zeros(3)).as_quat()
-            # d435_to_wall = get_transformation(tvec, rvec)
-
-            tvec = tvec.flatten() * 10
-            tvec[0] *= -1
-            rvec = R.from_rotvec(np.zeros(3)).as_quat()
-            d435_to_wall = get_transformation(tvec, rvec)
-
-        # breakpoint()
+        d435_to_wall = get_transformation(tvec, rvec) @ flip_yz
 
     else:
-        d435_to_wall = None
+        # General
+        # tvec = tvec.flatten() * 10
+        # tvec[0] *= -1
+        # tvec[1] *= -1
+        # print(tvec, trans)
+        # rvec = R.from_rotvec(np.zeros(3)).as_quat()
+        # d435_to_wall = get_transformation(tvec, rvec)
+
+        # 2022_02_26-06_52_39_PM.npz
+        # tvec = np.array([-0.01989264 + (0.0037),  -0.02225 + (-0.009), 0])
+        # rvec = R.from_rotvec(np.zeros(3)).as_quat()
+        # d435_to_wall = get_transformation(tvec, rvec)
+
+        # 2022_02_26-03_37_03_PM.npz
+        # tvec = np.array([[ 0.5],[0],[ -0.83944742]])
+        # rvec = np.array([-0.00300064,  0.09308793, -0.00868328,  0.9956155 ])
+        # transformer = np.eye(4)
+        # transformer[2,2] = -1
+        # transformer[3,3] = 1
+        # d435_to_wall = get_transformation(tvec.flatten(), rvec.flatten()) @ transformer
+
+
+        # TODO: Something with the rotation needs to be flipped, either in rvec, transformer or both
+        # 2022_02_27-09_48_26_PM.npz
+        # From Aruco Data in D435 Frame
+        tvec = -np.array([[0.062],[-0.238],[1.064]])
+        rvec = np.array([-0.066,  0.055, -0.009,  0.996])
+        rvec = R.from_quat(rvec).as_euler('xyz')
+        rvec[0] *= 1
+        rvec[1] *= 1
+        rvec[2] *= 1
+        rvec = R.from_euler('xyz', rvec).as_quat()
+
+
+        transformer = np.eye(4)
+        transformer[0,0] = 1
+        transformer[1,1] = -1
+        transformer[2,2] = 1
+
+        T265_to_D435_mat = np.array(
+            [
+                [0.999968402, -0.006753626, -0.004188075, -0.015890727],
+                [-0.006685408, -0.999848172, 0.016093893, 0.028273059],
+                [-0.004296131, -0.016065384, -0.999861654, -0.009375589],
+                [0, 0, 0, 1],
+            ]
+        )
+
+
+        
+
+        d435_to_wall = get_transformation(tvec.flatten(), rvec.flatten()) @ transformer @ np.linalg.inv(T265_to_D435_mat) @ np.linalg.inv(get_transformation(trans, rot))
+
+
+        # 2/27 5:43 - 7PM
+        # in_to_m = 0.0254
+        # mm_to_m = 0.001
+        # tvec = -np.array(
+        #     [-4 * in_to_m + 2 * in_to_m + (-12.54 * mm_to_m) + (25.62 * mm_to_m), 
+        #     (-0 * in_to_m) + (-20 * in_to_m) + (12.54 * mm_to_m) + (5.3 * mm_to_m) + (12.25 * mm_to_m), 
+        #     0.46 + (-5.3 * mm_to_m)]
+        # )
+        # rvec = R.from_rotvec(np.zeros(3)).as_quat()
+        # d435_to_wall = get_transformation(tvec, rvec)
 
     return d435_to_wall, frame, centroid_aruco
 
