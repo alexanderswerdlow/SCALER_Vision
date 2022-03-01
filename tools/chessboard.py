@@ -20,7 +20,7 @@ def calibrate(square_size=0.022):
     objpoints = []  # 3d point in real world space
     imgpoints = []  # 2d points in image plane.
 
-    images = glob.glob('images/**')
+    images = glob.glob('data_files/checkerboard/**')
 
     for fname in images:
         img = cv2.imread(fname)
@@ -40,8 +40,8 @@ def calibrate(square_size=0.022):
             #cv2.imshow(ARUCO.FRAME, img)
 
 
-    ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
-    print(mtx, dist)
+    ret, mtx, dist, _, _ = cv2.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
+    print(repr(mtx), repr(dist))
 
 calibrate()
 

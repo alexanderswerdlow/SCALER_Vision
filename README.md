@@ -37,7 +37,8 @@ Wall Frame (Viewing in front of wall):
 - Filter point clouds by segmentation score, bounding box size, etc.
 - Perform Ellipsoid Fitting on each point cloud
 
-
 ## Testing
 
 python fit_ellipsoid.py --run_from_file --capture 2022_02_26-06_52_39_PM.npz
+
+python fit_ellipsoid.py --run_from_file --capture 2022_02_27-09_48_26_PM.npz

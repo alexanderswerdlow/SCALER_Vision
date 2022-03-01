@@ -5,19 +5,40 @@ import shutil
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
+np.set_printoptions(suppress=True, precision=3)
+
+T265_to_D435_mat = np.array(
+    [
+        [0.999968402, -0.006753626, -0.004188075, -0.015890727],
+        [-0.006685408, -0.999848172, 0.016093893, 0.028273059],
+        [-0.004296131, -0.016065384, -0.999861654, -0.009375589],
+        [0, 0, 0, 1],
+    ]
+)
+
+camera_width, camera_height = 1280, 720
+camera_intrinsics = np.array([[886.50658842, 0.0, 643.11152258], [0.0, 889.00345804, 363.11086262], [0.0, 0.0, 1.0]])
+camera_distortion = np.array([[0.12163025, -0.35153439, 0.00296531, -0.00498172, 0.27180912]])
+
+# camera_intrinsics = np.array([[906.667, 0.0, 906.783], [0.0, 889.00345804, 358.885], [0.0, 0.0, 1.0]])
+# camera_distortion = np.array([[0.12163025, -0.35153439, 0.00296531, -0.00498172, 0.27180912]])
+
 def get_mean_std(arr):
-    return f'Mean: {np.mean(np.array([*arr]), axis=0)}, Std: {np.std(np.array([*arr]), axis=0)}'
+    return f"Mean: {np.mean(np.array([*arr]), axis=0)}, Std: {np.std(np.array([*arr]), axis=0)}"
+
 
 def rvec_2_euler(rvec):
-    EULER = 'zyx'
+    EULER = "zyx"
     euler_rvec = R.from_rotvec(rvec).as_quat()
     return euler_rvec
 
+
 def get_transformation(trans, rot):
-    #breakpoint()
+    # breakpoint()
     rot = R.from_quat(rot).as_matrix()
     trans = trans[np.newaxis].T
     return np.vstack((np.hstack((rot, trans)), np.array([0, 0, 0, 1])))
+
 
 class IncrementalNpzWriter:
     """

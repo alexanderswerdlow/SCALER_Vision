@@ -9,28 +9,9 @@ import pickle
 import argparse
 import numpy.linalg as la
 from scipy.spatial.transform import Rotation as R
-from util import get_transformation, get_mean_std
+from util import get_transformation, get_mean_std, T265_to_D435_mat, camera_intrinsics, camera_distortion, camera_width, camera_height
 from aruco import get_d435_to_wall
-
-T265_to_D435_mat = np.array(
-    [
-        [0.999968402, -0.006753626, -0.004188075, -0.015890727],
-        [-0.006685408, -0.999848172, 0.016093893, 0.028273059],
-        [-0.004296131, -0.016065384, -0.999861654, -0.009375589],
-        [0, 0, 0, 1],
-    ]
-)
-
-Wall_Frame_to_T265_mat = np.array(
-    [
-        [1, 0, 0, 0.4],  # Right is positive
-        [0, 1, 0, 0],  # Up is positive
-        [0, 0, 1, 0.81],  # Out of wall is positive
-        [0, 0, 0, 1],
-    ]
-)
-
-np.set_printoptions(suppress=True, precision=3)
+import json
 
 # Filtering params
 min_volume = 5e-5
@@ -42,7 +23,6 @@ min_dist_detection_clustering = 0.05
 handhold_voxel_downsample = 0.01
 fit_tolerance = 0.01
 
-
 def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
     """
     Calibration:  [ 1280x720  p[655.67 358.885]  f[906.667 906.783]  Inverse Brown Conrady [0 0 0 0 0] ] [0.0, 0.0, 0.0, 0.0, 0.0]
@@ -52,7 +32,7 @@ def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
     rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(im_rgb, im_depth, convert_rgb_to_intensity=False)
     intrinsic, extrinsic = param
     # Take intrinsics from numpy array use as params
-    intrinsic = o3d.camera.PinholeCameraIntrinsic(int(intrinsic[0]), int(intrinsic[1]), *intrinsic[2:])
+    intrinsic = o3d.camera.PinholeCameraIntrinsic(camera_width, camera_height, camera_intrinsics[0,0], camera_intrinsics[1,1], camera_intrinsics[0, 2], camera_intrinsics[1, 2])
     pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic, project_valid_depth_only=True)
     if extrinsic is not None:
         pcd.transform(extrinsic)  # Transform from D435 Frame to T265 Frame
@@ -101,7 +81,7 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
             detected_rgb_mask[mask], detected_depth_mask[mask] = im[mask], depth[mask]
 
             pcd = rgbd_to_pcl(detected_rgb_mask, detected_depth_mask, param, vis=False)
-            # pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+            pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
 
             if pcd.get_axis_aligned_bounding_box().get_extent().max() < min_axis_aligned_bounding_box_len or np.any(border_elems_generic(mask, 1)):
                 rejected_masks.add(idx)
@@ -338,8 +318,8 @@ if __name__ == "__main__":
             pickle.dump(detections, open(f"{args.data_files}/segmentation/{args.capture.rstrip('.npz')}.p", "wb"))
             exit()
 
-        import pickle
-        with open('data_files/generated/predictions.p', 'wb') as handle:
+        print(f"Saving predictions as {args.data_files}/generated/{args.capture.rstrip('.npz')}_predictions.p")
+        with open(f"{args.data_files}/generated/{args.capture.rstrip('.npz')}_predictions.p", 'wb') as handle:
             pickle.dump(all_predictions, handle)
 
         breakpoint()
@@ -365,8 +345,6 @@ if __name__ == "__main__":
                 ellipsoid_params_data.append({"frame": frame_key, "centroid": list(centroid), "rotation": list(rotation), "axis": list(axes)})
 
             all_ellipsoids.append(ellipsoid_params_data)
-
-            import json
 
             with open(f"data_files/ellipoids.json", "w", encoding="utf-8") as f:
                 json.dump(all_ellipsoids, f, ensure_ascii=False, indent=4)
