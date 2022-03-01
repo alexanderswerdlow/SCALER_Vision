@@ -186,7 +186,7 @@ def get_d435_to_wall(frame, intrinsics, trans, rot, frame_key, draw_frame=True):
     # d435_to_wall = get_transformation(tvec, rvec)
 
     # 2022_02_26-06_52_39_PM.npz
-    # tvec = np.array([-0.01989264 + (0.0037),  -0.02225 + (-0.009), 0])
+    # tvec = np.array([-0.052,  -0.02225 + (-0.009), 0])
     # rvec = R.from_rotvec(np.zeros(3)).as_quat()
     # d435_to_wall = get_transformation(tvec, rvec)
 
@@ -198,10 +198,20 @@ def get_d435_to_wall(frame, intrinsics, trans, rot, frame_key, draw_frame=True):
     # transformer[3,3] = 1
     # d435_to_wall = get_transformation(tvec.flatten(), rvec.flatten()) @ transformer
 
-    # TODO: Something with the rotation needs to be flipped, either in rvec, transformer or both
+    # 2/27 5:43 - 7PM
+    # in_to_m = 0.0254
+    # mm_to_m = 0.001
+    # tvec = -np.array(
+    #     [-4 * in_to_m + 2 * in_to_m + (-12.54 * mm_to_m) + (25.62 * mm_to_m), 
+    #     (-0 * in_to_m) + (-20 * in_to_m) + (12.54 * mm_to_m) + (5.3 * mm_to_m) + (12.25 * mm_to_m), 
+    #     0.46 + (-5.3 * mm_to_m)]
+    # )
+    # rvec = R.from_rotvec(np.zeros(3)).as_quat()
+    # d435_to_wall = get_transformation(tvec, rvec)
+
     # 2022_02_27-09_48_26_PM.npz
     tvec, rot_aruco = get_multi_tags(frame.copy(), frame_key)
-    tvec_init = np.array([0.066, 0.292, 1.01 ])
+    tvec_init = np.array([-0.249, 0.328, 1.04])
     transformer = np.array([[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]])
 
     T265_to_D435_mat = np.array(
@@ -213,23 +223,13 @@ def get_d435_to_wall(frame, intrinsics, trans, rot, frame_key, draw_frame=True):
         ]
     )
 
-    tvec[1] += 5.5 * 0.0254
+    tvec[0] += -0.011
+    tvec[1] += 0.157
     print(tvec, np.linalg.norm((tvec_init - tvec) - trans))
     try:
         d435_to_wall = get_transformation(tvec.flatten(), rot_aruco.flatten()) @ transformer @ np.linalg.inv(T265_to_D435_mat) @ np.linalg.inv(get_transformation(trans, rot))
     except:
         d435_to_wall = None
-
-    # 2/27 5:43 - 7PM
-    # in_to_m = 0.0254
-    # mm_to_m = 0.001
-    # tvec = -np.array(
-    #     [-4 * in_to_m + 2 * in_to_m + (-12.54 * mm_to_m) + (25.62 * mm_to_m), 
-    #     (-0 * in_to_m) + (-20 * in_to_m) + (12.54 * mm_to_m) + (5.3 * mm_to_m) + (12.25 * mm_to_m), 
-    #     0.46 + (-5.3 * mm_to_m)]
-    # )
-    # rvec = R.from_rotvec(np.zeros(3)).as_quat()
-    # d435_to_wall = get_transformation(tvec, rvec)
 
     return d435_to_wall, frame
 

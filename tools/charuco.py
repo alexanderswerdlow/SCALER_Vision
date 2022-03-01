@@ -28,7 +28,7 @@ image_size = None # Determined at runtime
 # I'm using a set of images taken with the camera with the naming convention:
 # 'camera-pic-of-charucoboard-<NUMBER>.jpg'
 # All images used should be the same size, which if taken with the same camera shouldn't be a problem
-images = glob.glob('data_files/checkerboard/**')
+images = glob.glob('data_files/charuco/**')
 
 # Loop through images glob'ed
 for iname in images:
@@ -47,6 +47,7 @@ for iname in images:
             image=img, 
             corners=corners)
 
+    print(iname)
     # Get charuco corners and ids from detected aruco markers
     response, charuco_corners, charuco_ids = aruco.interpolateCornersCharuco(
             markerCorners=corners,
@@ -75,13 +76,13 @@ for iname in images:
         proportion = max(img.shape) / 1000.0
         img = cv2.resize(img, (int(img.shape[1]/proportion), int(img.shape[0]/proportion)))
         # Pause to display each image, waiting for key press
-        cv2.imshow('Charuco board', img)
-        cv2.waitKey(0)
+        # cv2.imshow('Charuco board', img)
+        # cv2.waitKey(0)
     else:
         print("Not able to detect a charuco board in image: {}".format(iname))
 
 # Destroy any open CV windows
-cv2.destroyAllWindows()
+# cv2.destroyAllWindows()
 
 # Make sure at least one image was found
 if len(images) < 1:

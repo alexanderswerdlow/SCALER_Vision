@@ -17,11 +17,15 @@ T265_to_D435_mat = np.array(
 )
 
 camera_width, camera_height = 1280, 720
-camera_intrinsics = np.array([[886.50658842, 0.0, 643.11152258], [0.0, 889.00345804, 363.11086262], [0.0, 0.0, 1.0]])
-camera_distortion = np.array([[0.12163025, -0.35153439, 0.00296531, -0.00498172, 0.27180912]])
+# camera_intrinsics = np.array([[886.50658842, 0.0, 643.11152258], [0.0, 889.00345804, 363.11086262], [0.0, 0.0, 1.0]])
+# camera_distortion = np.array([[0.12163025, -0.35153439, 0.00296531, -0.00498172, 0.27180912]])
 
 # camera_intrinsics = np.array([[906.667, 0.0, 906.783], [0.0, 889.00345804, 358.885], [0.0, 0.0, 1.0]])
-# camera_distortion = np.array([[0.12163025, -0.35153439, 0.00296531, -0.00498172, 0.27180912]])
+# camera_distortion = np.zeros(5)
+
+# 03/01
+camera_intrinsics = np.array([[897.76995141, 0.0, 643.26778658], [0.0, 900.99028667, 352.81364263], [0.0, 0.0, 1.0]])
+camera_distortion = np.array([[ 0.1446363 , -0.41231416, -0.00208682, -0.00456624,  0.33925124]])
 
 def get_mean_std(arr):
     return f"Mean: {np.mean(np.array([*arr]), axis=0)}, Std: {np.std(np.array([*arr]), axis=0)}"

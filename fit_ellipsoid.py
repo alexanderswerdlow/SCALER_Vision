@@ -20,7 +20,7 @@ min_axis_aligned_bounding_box_len = 0.075
 min_detections = 5
 
 min_dist_detection_clustering = 0.05
-handhold_voxel_downsample = 0.01
+handhold_voxel_downsample = 0.001
 fit_tolerance = 0.01
 
 def rgbd_to_pcl(rgb_im, depth_im, param, vis=False):
@@ -81,7 +81,7 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
             detected_rgb_mask[mask], detected_depth_mask[mask] = im[mask], depth[mask]
 
             pcd = rgbd_to_pcl(detected_rgb_mask, detected_depth_mask, param, vis=False)
-            pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+            pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=50, std_ratio=0.1)
 
             if pcd.get_axis_aligned_bounding_box().get_extent().max() < min_axis_aligned_bounding_box_len or np.any(border_elems_generic(mask, 1)):
                 rejected_masks.add(idx)
@@ -90,21 +90,20 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
         else:
             rejected_masks.add(idx)
 
-    background_rgb, background_depth = im.copy(), depth.copy()  # Background images with detected regions removed
-    for idx, mask in enumerate(masks):
-        if idx not in rejected_masks:
-            background_rgb[mask] = [0, 0, 0]
-            background_depth[mask] = -1
-
-    pcd_background = rgbd_to_pcl(background_rgb, background_depth, param, vis=False).voxel_down_sample(voxel_size=0.005)
-
     if args.verbose:
+        background_rgb, background_depth = im.copy(), depth.copy()  # Background images with detected regions removed
+        for idx, mask in enumerate(masks):
+            if idx not in rejected_masks:
+                background_rgb[mask] = [0, 0, 0]
+                background_depth[mask] = -1
+
+        pcd_background = rgbd_to_pcl(background_rgb, background_depth, param, vis=False) #.voxel_down_sample(voxel_size=0.005)
         print(f"Projecting + Filtering points for frame {frame_key} took {time.time() - start}")
         fig = plt.figure(figsize=(12, 12))
         ax = fig.add_subplot(111, projection="3d")
 
         points = np.asarray(pcd_background.points)
-        ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=np.asarray(pcd_background.colors), label=f"Background", alpha=0.65, s=0.5)
+        ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=np.asarray(pcd_background.colors), label=f"Background", alpha=0.65, s=0.1)
 
     if args.viz:
         vis.clear_geometries()
@@ -120,7 +119,6 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
         points = np.asarray(cluster_pcd.points)
 
         try:
-            start = time.time()
             A, centroid = outer_ellipsoid.outer_ellipsoid_fit(points, tol=fit_tolerance)
             _, D, V = la.svd(A)
             axes = 1.0 / np.sqrt(D)
@@ -143,8 +141,8 @@ def cluster_and_fit(im, depth, param, scores, boxes, masks):
         ax.set_xlim3d([-0.75, 0.75])
         ax.set_ylim3d([0.75, -0.75])
         ax.set_zlim3d([0, 1])
-        plt.title(f"Detected {len(ellipsoids)} handholds at pos: {trans*100}")
-        plt.legend(loc="best")
+        # plt.title(f"Detected {len(ellipsoids)} handholds at pos: {trans*100}")
+        # plt.legend(loc="best")
         plt.savefig(f"output/3d-{frame_key}.png", dpi=500, bbox_inches="tight")
         ax.cla()
         plt.close()
@@ -165,25 +163,30 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
             return None, None
         scores, boxes, masks = detection
 
-    # For T265 Only
-    # extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat
-
-    # For Aruco Tags
-    global d435_to_wall
-    extrinsic = None
-    if d435_to_wall is None:
-        d435_to_wall, _ = get_d435_to_wall(color_image, intrinsic, trans, rot, frame_key)
+    print(f"Frame Segmentation {frame_key} took {time.time() - start}")
+    use_aruco = False
+    if use_aruco:
+        # For Aruco Tags
+        global d435_to_wall
+        extrinsic = None
         if d435_to_wall is None:
-            print("Failed to find aruco tag")
-            return None, detection
-    else:
-        get_d435_to_wall(color_image, intrinsic, trans, rot, frame_key)
+            d435_to_wall, _ = get_d435_to_wall(color_image, intrinsic, trans, rot, frame_key)
+            if d435_to_wall is None:
+                print("Failed to find aruco tag")
+                return None, detection
+        else:
+            get_d435_to_wall(color_image, intrinsic, trans, rot, frame_key)
 
-    extrinsic = d435_to_wall @ get_transformation(trans, rot) @ T265_to_D435_mat# 
+        extrinsic = d435_to_wall @ get_transformation(trans, rot) @ T265_to_D435_mat
+    else:
+        # For T265 Only
+        extrinsic = get_transformation(trans, rot) @ T265_to_D435_mat
+    print(f"Frame Before Cluster/Fit {frame_key} took {time.time() - start}")
     ellipsoids = cluster_and_fit(color_image, depth_image, (intrinsic, extrinsic), scores, boxes, masks)
+    print(f"Frame {frame_key} took {time.time() - start}")
     
     if args.verbose:
-        print(f"Frame {frame_key} took {time.time() - start}")
+        
         plt.imsave(f"output/rgb-{frame_key}.png", color_image)
 
     for A, centroid, _, axes in ellipsoids:
@@ -206,24 +209,29 @@ def run_pipeline(color_image, depth_image, ir_image, intrinsic, trans, rot, dete
             all_centers.append(center[:2]*100)
             all_euc_err.append(np.linalg.norm(handhold_gt[idx] - center[:2])*100)
 
+        # if args.verbose:
+        #     outer_ellipsoid.plot_ellipsoid(A, centroid, "green", ax)
+        #     ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=np.asarray(cluster_pcd.colors), label=f"{idx}-pos(cm):{centroid*100}-ax:{axes*100*2}", alpha=0.8, s=0.1)
+        #     ax.text(*centroid, f"{idx}", size=15, zorder=3, color="red")
+
         print(f'GT for {idx}: {100*handhold_gt[idx]}, Center: {get_mean_std(centers)}, Err: {get_mean_std(center_errors)}')
 
     if len(handholds) > 0:  
         print(f"GT Overall Err: Euclidean: {get_mean_std(all_euc_err)}, X,Y: {get_mean_std(all_err)}")
 
-    #if args.verbose:
-        # fig = plt.figure(figsize=(12, 12))
-        # ax = fig.add_subplot(111, projection="3d")
-        # ax.set_xlim3d([-1, 1])
-        # ax.set_ylim3d([-0.5, 0.5])
-        # ax.set_zlim3d([0, 1])
-        # ax.view_init(elev=270, azim=270)
+    # if args.verbose:
+    #     fig = plt.figure(figsize=(12, 12))
+    #     ax = fig.add_subplot(111, projection="3d")
 
-        # print(f"Abs Overall X,Y: {get_mean_std(all_centers)}")
-        # plt.title(f"Detected {len(ellipsoids)} handholds at pos: {trans*100}")
-        # plt.savefig(f"output/map-{frame_key}.png", dpi=300, bbox_inches="tight")
-        # ax.cla()
-        # plt.close()
+
+    #     ax.set_xlim3d([-1, 1])
+    #     ax.set_ylim3d([-0.5, 0.5])
+    #     ax.set_zlim3d([0, 1])
+    #     ax.view_init(elev=270, azim=270)
+    #     plt.title(f"Detected {len(ellipsoids)} handholds at pos: {trans*100}")
+    #     plt.savefig(f"output/map-{frame_key}.png", dpi=300, bbox_inches="tight")
+    #     ax.cla()
+    #     plt.close()
 
     return filtered_response, detection
 
@@ -274,14 +282,14 @@ if __name__ == "__main__":
         vis = o3d.visualization.Visualizer()
         vis.create_window()
 
-    # if args.verbose:
-    #     import os
-    #     import shutil
+    if args.verbose:
+        import os
+        import shutil
 
-    #     dir = 'output'
-    #     if os.path.exists(dir):
-    #         shutil.rmtree(dir)
-    #     os.makedirs(dir)
+        dir = 'output'
+        if os.path.exists(dir):
+            shutil.rmtree(dir)
+        os.makedirs(dir)
 
     all_predictions = []
     d435_to_wall = None
@@ -299,6 +307,11 @@ if __name__ == "__main__":
         print(len(frames))
 
         for frame_key in frames:
+
+            frame_idx = int(frame_key)
+
+            # if frame_idx < 0 or frame_idx > 60:
+            #     continue
 
             try:
                 color_image, depth_image, ir_image, intrinsic, trans, rot = loaded[frame_key]
